@@ -445,13 +445,14 @@ export default function SessionDetailPage() {
         <CardContent className="p-4 pt-0 text-sm">
           {isAdmin ? (
             <div className="space-y-1">
-              <p>Total Due: <span className="font-semibold">${(costPerPlayer * confirmed.length).toFixed(2)}</span></p>
               <p>Court Cost: <span className="font-semibold">${session.court_cost.toFixed(2)}</span></p>
+              <p>Total (with {session.buffer_pct}% buffer): <span className="font-semibold">${(session.court_cost * (1 + session.buffer_pct / 100)).toFixed(2)}</span></p>
+              <p>Per Player: <span className="font-semibold">${costPerPlayer.toFixed(2)}</span></p>
               <Button
                 size="sm"
                 variant="outline"
                 className="mt-2"
-                onClick={() => window.location.href = `/admin/sessions/${session.id}/payments`}
+                onClick={() => window.location.href = `/admin/sessions/${session.id}`}
               >
                 Manage Payments
               </Button>
