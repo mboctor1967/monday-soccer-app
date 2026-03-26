@@ -89,7 +89,7 @@ export default function AdminSessionsPage() {
           <Plus className="mr-1 h-4 w-4" /> New
         </Button>
       </div>
-      {sessions.map((session) => {
+      {sessions.filter((s) => ["upcoming", "signups_closed", "teams_published"].includes(s.status)).map((session) => {
         const maxPlayers = session.format === "3t" ? 15 : 10;
         const pctPaid = session.payment_total > 0 ? (session.paid_count / session.payment_total) * 100 : 0;
         const barColor = pctPaid === 100 ? "bg-green-500" : pctPaid >= 50 ? "bg-yellow-500" : "bg-red-500";
@@ -145,6 +145,47 @@ export default function AdminSessionsPage() {
           </Card>
         );
       })}
+      {sessions.filter((s) => ["completed", "cancelled"].includes(s.status)).length > 0 && (
+        <>
+          <h3 className="text-sm font-medium text-muted-foreground pt-2">Past Sessions</h3>
+          {sessions.filter((s) => ["completed", "cancelled"].includes(s.status)).map((session) => {
+            const maxPlayers = session.format === "3t" ? 15 : 10;
+            return (
+              <Card
+                key={session.id}
+                className="cursor-pointer hover:bg-muted/30 transition-colors opacity-50"
+                onClick={() => router.push(`/admin/sessions/${session.id}`)}
+              >
+                <CardContent className="p-4">
+                  <div className="flex items-start justify-between mb-1">
+                    <div className="flex items-center gap-2">
+                      <Calendar className="h-4 w-4 text-muted-foreground" />
+                      <span className="font-medium text-sm">
+                        {new Date(session.date).toLocaleDateString("en-AU", { weekday: "long", day: "numeric", month: "short", year: "numeric" })}
+                      </span>
+                    </div>
+                    <Badge className={statusColor[session.status]}>{session.status.replace(/_/g, " ")}</Badge>
+                  </div>
+                  <div className="space-y-1 text-xs text-muted-foreground">
+                    <div className="flex items-center gap-3">
+                      <span className="flex items-center gap-1"><MapPin className="h-3 w-3" /> {session.venue}</span>
+                      <span className="flex items-center gap-1">
+                        <Users className="h-3 w-3" /> {session.confirmed_count}/{maxPlayers}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span>by {session.creator_name} · {new Date(session.created_at).toLocaleDateString("en-AU", { day: "numeric", month: "short" })}</span>
+                      {session.payment_total > 0 && (
+                        <span>{session.paid_count}/{session.payment_total} paid</span>
+                      )}
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            );
+          })}
+        </>
+      )}
     </div>
   );
 }
