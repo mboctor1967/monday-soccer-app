@@ -443,27 +443,65 @@ export default function SessionDetailPage() {
           <CardTitle className="text-base">Payment</CardTitle>
         </CardHeader>
         <CardContent className="p-4 pt-0 text-sm">
-          {isAdmin ? (
-            <div className="space-y-1">
-              <p>Court Cost: <span className="font-semibold">${session.court_cost.toFixed(2)}</span></p>
-              <p>Total (with {session.buffer_pct}% buffer): <span className="font-semibold">${(session.court_cost * (1 + session.buffer_pct / 100)).toFixed(2)}</span></p>
-              <p>Per Player: <span className="font-semibold">${costPerPlayer.toFixed(2)}</span></p>
-              <Button
-                size="sm"
-                variant="outline"
-                className="mt-2"
-                onClick={() => window.location.href = `/admin/sessions/${session.id}`}
-              >
-                Manage Payments
-              </Button>
-            </div>
-          ) : player?.player_type === "regular" ? (
-            <p>
-              {paymentSummary.paid} of {paymentSummary.total} players have paid
-              {paymentSummary.total - paymentSummary.paid > 0 &&
-                `, ${paymentSummary.total - paymentSummary.paid} outstanding`}
-            </p>
-          ) : myPayment ? (
+          {isAdmin ? (() => {
+            const totalWithBuffer = session.court_cost * (1 + session.buffer_pct / 100);
+            const paidCount = paymentSummary.paid;
+            const totalCount = paymentSummary.total;
+            const pctPaid = totalCount > 0 ? (paidCount / totalCount) * 100 : 0;
+            const barColor = pctPaid === 100 ? "bg-green-500" : pctPaid >= 50 ? "bg-yellow-500" : "bg-red-500";
+            return (
+              <div className="space-y-3">
+                <div className="grid grid-cols-3 text-center">
+                  <div>
+                    <p className="text-xs text-muted-foreground">Court</p>
+                    <p className="font-semibold">${session.court_cost.toFixed(0)}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground">+ {session.buffer_pct}% buffer</p>
+                    <p className="font-semibold">${totalWithBuffer.toFixed(0)}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground">Per Player</p>
+                    <p className="font-semibold">${costPerPlayer.toFixed(2)}</p>
+                  </div>
+                </div>
+                <div>
+                  <div className="flex justify-between text-xs mb-1">
+                    <span>{paidCount} / {totalCount} players paid</span>
+                    <span>{Math.round(pctPaid)}%</span>
+                  </div>
+                  <div className="h-3 w-full rounded-full bg-gray-200 overflow-hidden">
+                    <div className={`h-full rounded-full transition-all ${barColor}`} style={{ width: `${pctPaid}%` }} />
+                  </div>
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="w-full"
+                  onClick={() => window.location.href = `/admin/sessions/${session.id}`}
+                >
+                  Manage Payments
+                </Button>
+              </div>
+            );
+          })() : player?.player_type === "regular" ? (() => {
+            const pctPaid = paymentSummary.total > 0 ? (paymentSummary.paid / paymentSummary.total) * 100 : 0;
+            const barColor = pctPaid === 100 ? "bg-green-500" : pctPaid >= 50 ? "bg-yellow-500" : "bg-red-500";
+            return (
+              <div>
+                <div className="flex justify-between text-xs mb-1">
+                  <span>{paymentSummary.paid} / {paymentSummary.total} players paid</span>
+                  <span>{Math.round(pctPaid)}%</span>
+                </div>
+                <div className="h-3 w-full rounded-full bg-gray-200 overflow-hidden">
+                  <div className={`h-full rounded-full transition-all ${barColor}`} style={{ width: `${pctPaid}%` }} />
+                </div>
+                {paymentSummary.total - paymentSummary.paid > 0 && (
+                  <p className="text-xs text-muted-foreground mt-1">{paymentSummary.total - paymentSummary.paid} outstanding</p>
+                )}
+              </div>
+            );
+          })() : myPayment ? (
             <div className="space-y-1">
               <p>Amount Due: <span className="font-semibold">${myPayment.amount_due.toFixed(2)}</span></p>
               <p>Amount Paid: <span className="font-semibold">${myPayment.amount_paid.toFixed(2)}</span></p>

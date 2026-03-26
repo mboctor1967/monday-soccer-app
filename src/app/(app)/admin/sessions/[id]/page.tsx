@@ -408,12 +408,20 @@ export default function AdminSessionDetailPage() {
         <CardHeader className="pb-2">
           <div className="flex items-center justify-between">
             <CardTitle className="text-base">Confirmed ({confirmed.length}/{maxPlayers})</CardTitle>
-            {payments.length > 0 && (
-              <div className="text-xs text-muted-foreground text-right">
-                <div>${totalCollected.toFixed(2)} / ${totalDue.toFixed(2)} collected</div>
-                <div>{payments.filter((p) => p.payment_status === "paid").length} / {payments.length} paid</div>
-              </div>
-            )}
+            {payments.length > 0 && (() => {
+              const paidCount = payments.filter((p) => p.payment_status === "paid").length;
+              const pctPaid = payments.length > 0 ? (paidCount / payments.length) * 100 : 0;
+              const barColor = pctPaid === 100 ? "bg-green-500" : pctPaid >= 50 ? "bg-yellow-500" : "bg-red-500";
+              return (
+                <div className="text-xs text-right min-w-[120px]">
+                  <div className="text-muted-foreground">${totalCollected.toFixed(2)} / ${totalDue.toFixed(2)}</div>
+                  <div className="text-muted-foreground">{paidCount} / {payments.length} paid</div>
+                  <div className="h-2 w-full rounded-full bg-gray-200 overflow-hidden mt-1">
+                    <div className={`h-full rounded-full transition-all ${barColor}`} style={{ width: `${pctPaid}%` }} />
+                  </div>
+                </div>
+              );
+            })()}
           </div>
           <div className="pt-1">
             <Select value={session.court_payer_id || ""} onValueChange={(v) => v && handleSetCourtPayer(v)}>
