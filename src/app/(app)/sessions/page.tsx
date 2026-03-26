@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Calendar, MapPin, Users, ChevronRight, Clock, DollarSign } from "lucide-react";
+import { Calendar, MapPin, Users, ChevronRight, Clock } from "lucide-react";
 import type { Session } from "@/lib/types/database";
 
 interface SessionWithStats extends Session {
@@ -130,10 +130,10 @@ export default function SessionsPage() {
                     )}
                   </div>
                   <div className="flex items-center justify-between">
-                    <span className="text-xs">Created by {session.creator_name}</span>
+                    <span className="text-xs">by {session.creator_name} · {new Date(session.created_at).toLocaleDateString("en-AU", { day: "numeric", month: "short" })}</span>
                     {session.payment_total > 0 && (
                       <span className="flex items-center gap-1">
-                        <DollarSign className="h-3 w-3" /> {session.paid_count}/{session.payment_total} paid
+                        <Users className="h-3 w-3" /> {session.paid_count}/{session.payment_total} paid
                       </span>
                     )}
                     <ChevronRight className="h-4 w-4" />

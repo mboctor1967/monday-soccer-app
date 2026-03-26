@@ -124,12 +124,14 @@ export default function AdminSessionsPage() {
                   <span>${session.court_cost}</span>
                 </div>
                 <div className="flex items-center justify-between">
-                  <span>by {session.creator_name}</span>
+                  <span>by {session.creator_name} · {new Date(session.created_at).toLocaleDateString("en-AU", { day: "numeric", month: "short" })}</span>
                   {session.payment_total > 0 && (
-                    <span className="flex items-center gap-1">
-                      <DollarSign className="h-3 w-3" />
-                      ${session.total_collected.toFixed(0)} / ${session.total_due.toFixed(0)}
-                      ({session.paid_count}/{session.payment_total} paid)
+                    <span className="flex items-center gap-2">
+                      <span>{session.paid_count}/{session.payment_total} paid</span>
+                      <span className="flex items-center gap-0.5">
+                        <DollarSign className="h-3 w-3" />
+                        {session.total_collected.toFixed(0)}/{session.total_due.toFixed(0)}
+                      </span>
                     </span>
                   )}
                 </div>
