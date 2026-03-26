@@ -498,7 +498,12 @@ export default function AdminSessionDetailPage() {
               if (!playerId) return;
               const alreadyIn = rsvps.some((r) => r.player_id === playerId);
               if (alreadyIn) { toast.info("Player already in session"); return; }
-              const isFull = confirmed.length >= maxPlayers;
+              // Re-check confirmed count from current state to prevent exceeding max
+              const currentConfirmed = rsvps.filter((r) => r.status === "confirmed" && !r.is_waitlist).length;
+              const isFull = currentConfirmed >= maxPlayers;
+              if (isFull) {
+                toast.info("Session is full — adding to waitlist instead");
+              }
               let waitlistPosition = null;
               if (isFull) {
                 waitlistPosition = waitlist.length + 1;

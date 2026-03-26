@@ -5,23 +5,61 @@ import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Calendar, MapPin, Users, ChevronRight } from "lucide-react";
+import { Calendar, MapPin, Users, ChevronRight, Clock, DollarSign } from "lucide-react";
 import type { Session } from "@/lib/types/database";
 
+interface SessionWithStats extends Session {
+  creator_name?: string;
+  confirmed_count: number;
+  waitlist_count: number;
+  paid_count: number;
+  payment_total: number;
+  total_collected: number;
+  total_due: number;
+}
+
 export default function SessionsPage() {
-  const [sessions, setSessions] = useState<Session[]>([]);
+  const [sessions, setSessions] = useState<SessionWithStats[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const router = useRouter();
   const supabase = createClient();
 
   useEffect(() => {
     async function fetch() {
-      const { data } = await supabase
+      const { data: rawSessions } = await supabase
         .from("sessions")
-        .select("*")
+        .select("*, creator:players!sessions_created_by_fkey(name)")
         .order("date", { ascending: false })
         .limit(20);
-      setSessions((data || []) as Session[]);
+
+      if (!rawSessions) { setIsLoading(false); return; }
+
+      const sessionsWithStats: SessionWithStats[] = await Promise.all(
+        rawSessions.map(async (s: Record<string, unknown>) => {
+          const session = s as unknown as Session & { creator?: { name: string } };
+
+          const [rsvpRes, paymentRes] = await Promise.all([
+            supabase.from("rsvps").select("is_waitlist, status").eq("session_id", session.id),
+            supabase.from("payments").select("payment_status, amount_paid, amount_due").eq("session_id", session.id),
+          ]);
+
+          const rsvps = rsvpRes.data || [];
+          const payments = paymentRes.data || [];
+
+          return {
+            ...session,
+            creator_name: (s.creator as { name: string } | null)?.name || "Unknown",
+            confirmed_count: rsvps.filter((r) => r.status === "confirmed" && !r.is_waitlist).length,
+            waitlist_count: rsvps.filter((r) => r.is_waitlist).length,
+            paid_count: payments.filter((p) => p.payment_status === "paid").length,
+            payment_total: payments.length,
+            total_collected: payments.reduce((sum, p) => sum + (p.amount_paid || 0), 0),
+            total_due: payments.reduce((sum, p) => sum + (p.amount_due || 0), 0),
+          };
+        })
+      );
+
+      setSessions(sessionsWithStats);
       setIsLoading(false);
     }
     fetch();
@@ -54,42 +92,57 @@ export default function SessionsPage() {
           </CardContent>
         </Card>
       ) : (
-        sessions.map((session) => (
-          <Card
-            key={session.id}
-            className="cursor-pointer hover:bg-muted/50 transition-colors"
-            onClick={() => router.push(`/sessions/${session.id}`)}
-          >
-            <CardContent className="p-4">
-              <div className="flex items-start justify-between mb-2">
-                <div className="flex items-center gap-2">
-                  <Calendar className="h-4 w-4 text-muted-foreground" />
-                  <span className="font-medium">
-                    {new Date(session.date).toLocaleDateString("en-AU", {
-                      weekday: "short",
-                      day: "numeric",
-                      month: "short",
-                    })}
-                  </span>
+        sessions.map((session) => {
+          const maxPlayers = session.format === "3t" ? 15 : 10;
+          return (
+            <Card
+              key={session.id}
+              className="cursor-pointer hover:bg-muted/50 transition-colors"
+              onClick={() => router.push(`/sessions/${session.id}`)}
+            >
+              <CardContent className="p-4">
+                <div className="flex items-start justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <Calendar className="h-4 w-4 text-muted-foreground" />
+                    <span className="font-medium">
+                      {new Date(session.date).toLocaleDateString("en-AU", {
+                        weekday: "short",
+                        day: "numeric",
+                        month: "short",
+                      })}
+                    </span>
+                  </div>
+                  <Badge className={statusColor[session.status]}>
+                    {session.status.replace(/_/g, " ")}
+                  </Badge>
                 </div>
-                <Badge className={statusColor[session.status]}>
-                  {session.status.replace(/_/g, " ")}
-                </Badge>
-              </div>
-              <div className="flex items-center justify-between text-sm text-muted-foreground">
-                <div className="flex items-center gap-1">
-                  <MapPin className="h-3 w-3" />
-                  {session.venue}
+                <div className="space-y-1 text-xs text-muted-foreground">
+                  <div className="flex items-center gap-4">
+                    <span className="flex items-center gap-1"><MapPin className="h-3 w-3" /> {session.venue}</span>
+                    <span className="flex items-center gap-1"><Clock className="h-3 w-3" /> {session.start_time}</span>
+                  </div>
+                  <div className="flex items-center gap-4">
+                    <span className="flex items-center gap-1">
+                      <Users className="h-3 w-3" /> {session.confirmed_count}/{maxPlayers} confirmed
+                    </span>
+                    {session.waitlist_count > 0 && (
+                      <span className="text-orange-600">{session.waitlist_count} waitlisted</span>
+                    )}
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs">Created by {session.creator_name}</span>
+                    {session.payment_total > 0 && (
+                      <span className="flex items-center gap-1">
+                        <DollarSign className="h-3 w-3" /> {session.paid_count}/{session.payment_total} paid
+                      </span>
+                    )}
+                    <ChevronRight className="h-4 w-4" />
+                  </div>
                 </div>
-                <div className="flex items-center gap-1">
-                  <Users className="h-3 w-3" />
-                  {session.format === "3t" ? "3 teams (15)" : "2 teams (10)"}
-                </div>
-                <ChevronRight className="h-4 w-4" />
-              </div>
-            </CardContent>
-          </Card>
-        ))
+              </CardContent>
+            </Card>
+          );
+        })
       )}
     </div>
   );
