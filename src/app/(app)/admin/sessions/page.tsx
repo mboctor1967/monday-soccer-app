@@ -7,7 +7,12 @@ import { useAuth } from "@/lib/context/auth-context";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Calendar, MapPin, Users, DollarSign } from "lucide-react";
+import {
+  Dialog, DialogContent, DialogDescription, DialogFooter,
+  DialogHeader, DialogTitle
+} from "@/components/ui/dialog";
+import { toast } from "sonner";
+import { Plus, Calendar, MapPin, Users, DollarSign, Trash2 } from "lucide-react";
 import type { Session } from "@/lib/types/database";
 
 interface SessionWithStats extends Session {
@@ -21,13 +26,16 @@ interface SessionWithStats extends Session {
 }
 
 export default function AdminSessionsPage() {
-  const { isAdmin } = useAuth();
+  const { isAdmin, isLoading: authLoading } = useAuth();
   const router = useRouter();
   const supabase = createClient();
   const [sessions, setSessions] = useState<SessionWithStats[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [deleteTarget, setDeleteTarget] = useState<SessionWithStats | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
+    if (authLoading) return;
     if (!isAdmin) { router.push("/"); return; }
     async function fetch() {
       const { data: rawSessions } = await supabase
@@ -67,7 +75,26 @@ export default function AdminSessionsPage() {
     }
     fetch();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAdmin]);
+  }, [isAdmin, authLoading]);
+
+  async function handleDeleteSession(session: SessionWithStats) {
+    setDeleting(true);
+    // Delete related data first
+    const { data: existingTeams } = await supabase.from("teams").select("id").eq("session_id", session.id);
+    if (existingTeams && existingTeams.length > 0) {
+      const teamIds = existingTeams.map((t) => t.id);
+      await supabase.from("team_players").delete().in("team_id", teamIds);
+      await supabase.from("teams").delete().eq("session_id", session.id);
+    }
+    await supabase.from("notifications").delete().eq("session_id", session.id);
+    await supabase.from("payments").delete().eq("session_id", session.id);
+    await supabase.from("rsvps").delete().eq("session_id", session.id);
+    await supabase.from("sessions").delete().eq("id", session.id);
+    setSessions((prev) => prev.filter((s) => s.id !== session.id));
+    setDeleteTarget(null);
+    setDeleting(false);
+    toast.success("Session deleted");
+  }
 
   const statusColor: Record<string, string> = {
     upcoming: "bg-blue-100 text-blue-800",
@@ -107,7 +134,15 @@ export default function AdminSessionsPage() {
                     {new Date(session.date).toLocaleDateString("en-AU", { weekday: "long", day: "numeric", month: "short", year: "numeric" })}
                   </span>
                 </div>
-                <Badge className={statusColor[session.status]}>{session.status.replace(/_/g, " ")}</Badge>
+                <div className="flex items-center gap-1">
+                  <Badge className={statusColor[session.status]}>{session.status.replace(/_/g, " ")}</Badge>
+                  <button
+                    className="p-1 rounded hover:bg-red-100 text-muted-foreground hover:text-red-600 transition-colors"
+                    onClick={(e) => { e.stopPropagation(); setDeleteTarget(session); }}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </div>
               </div>
               <div className="space-y-1 text-xs text-muted-foreground">
                 <div className="flex items-center gap-3">
@@ -164,7 +199,15 @@ export default function AdminSessionsPage() {
                         {new Date(session.date).toLocaleDateString("en-AU", { weekday: "long", day: "numeric", month: "short", year: "numeric" })}
                       </span>
                     </div>
-                    <Badge className={statusColor[session.status]}>{session.status.replace(/_/g, " ")}</Badge>
+                    <div className="flex items-center gap-1">
+                      <Badge className={statusColor[session.status]}>{session.status.replace(/_/g, " ")}</Badge>
+                      <button
+                        className="p-1 rounded hover:bg-red-100 text-muted-foreground hover:text-red-600 transition-colors"
+                        onClick={(e) => { e.stopPropagation(); setDeleteTarget(session); }}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
                   </div>
                   <div className="space-y-1 text-xs text-muted-foreground">
                     <div className="flex items-center gap-3">
@@ -186,6 +229,32 @@ export default function AdminSessionsPage() {
           })}
         </>
       )}
+
+      {/* Delete Confirmation Dialog */}
+      <Dialog open={deleteTarget !== null} onOpenChange={(open) => { if (!open) setDeleteTarget(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Session</DialogTitle>
+            <DialogDescription>
+              Delete the session on{" "}
+              <span className="font-semibold">
+                {deleteTarget && new Date(deleteTarget.date).toLocaleDateString("en-AU", { weekday: "long", day: "numeric", month: "short" })}
+              </span>
+              ? This will permanently remove all RSVPs, teams, payments, and messages for this session.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setDeleteTarget(null)}>Cancel</Button>
+            <Button
+              variant="destructive"
+              onClick={() => deleteTarget && handleDeleteSession(deleteTarget)}
+              disabled={deleting}
+            >
+              {deleting ? "Deleting..." : "Delete"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

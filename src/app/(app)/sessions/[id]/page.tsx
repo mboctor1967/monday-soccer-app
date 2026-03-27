@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { useAuth } from "@/lib/context/auth-context";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -15,7 +15,7 @@ import {
   DialogHeader, DialogTitle
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { Calendar, Clock, MapPin, Users, DollarSign, Star, LogOut, UserPlus } from "lucide-react";
+import { Calendar, Clock, MapPin, Users, DollarSign, Star, LogOut, UserPlus, CreditCard, Phone, Shield, Search } from "lucide-react";
 import type { Session, Rsvp, Player, Team, Payment } from "@/lib/types/database";
 
 interface TeamWithPlayers extends Team {
@@ -24,6 +24,7 @@ interface TeamWithPlayers extends Team {
 
 export default function SessionDetailPage() {
   const { id } = useParams<{ id: string }>();
+  const searchParams = useSearchParams();
   const { player, isAdmin, isLoading: authLoading } = useAuth();
   const supabase = createClient();
 
@@ -31,6 +32,7 @@ export default function SessionDetailPage() {
   const [rsvps, setRsvps] = useState<(Rsvp & { player: Player })[]>([]);
   const [teams, setTeams] = useState<TeamWithPlayers[]>([]);
   const [myPayment, setMyPayment] = useState<Payment | null>(null);
+  const [allPayments, setAllPayments] = useState<(Payment & { player?: { name: string } })[]>([]);
   const [paymentSummary, setPaymentSummary] = useState({ paid: 0, total: 0 });
   const [isLoading, setIsLoading] = useState(true);
   const [withdrawing, setWithdrawing] = useState(false);
@@ -38,7 +40,15 @@ export default function SessionDetailPage() {
   const [showAddWaitlist, setShowAddWaitlist] = useState(false);
   const [waitlistForm, setWaitlistForm] = useState({ name: "", mobile: "", email: "" });
   const [addingToWaitlist, setAddingToWaitlist] = useState(false);
+  const [playerWaitlistSearch, setPlayerWaitlistSearch] = useState("");
+  const [playerWaitlistHighlight, setPlayerWaitlistHighlight] = useState(-1);
+  const [showNewPlayerForm, setShowNewPlayerForm] = useState(false);
+  const [allActivePlayers, setAllActivePlayers] = useState<Player[]>([]);
   const [rsvpLoading, setRsvpLoading] = useState(false);
+  const [showPayIdDialog, setShowPayIdDialog] = useState(false);
+  const [payIdRef, setPayIdRef] = useState<string[]>([]);
+  const [paymentProcessing, setPaymentProcessing] = useState(false);
+  const [selectedPaymentIds, setSelectedPaymentIds] = useState<Set<string>>(new Set());
 
   async function handleWithdraw() {
     if (!player || !session) return;
@@ -182,6 +192,84 @@ export default function SessionDetailPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, player, authLoading]);
 
+  useEffect(() => {
+    const paymentStatus = searchParams.get("payment");
+    if (paymentStatus === "success") {
+      toast.success("Payment successful! Thank you.");
+    } else if (paymentStatus === "cancelled") {
+      toast.info("Payment was cancelled.");
+    }
+  }, [searchParams]);
+
+  function togglePaymentSelection(paymentId: string) {
+    setSelectedPaymentIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(paymentId)) next.delete(paymentId); else next.add(paymentId);
+      return next;
+    });
+  }
+
+  const selectedPayments = allPayments.filter((p) => selectedPaymentIds.has(p.id));
+  const selectedTotal = selectedPayments.reduce((s, p) => s + (Number(p.amount_due) || 0), 0);
+  const selectedTotalWithFee = selectedTotal * 1.035;
+
+  async function handleStripeCheckout() {
+    if (selectedPaymentIds.size === 0) return;
+    setPaymentProcessing(true);
+    try {
+      const res = await fetch("/api/payments/create-checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ payment_ids: Array.from(selectedPaymentIds) }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      window.location.href = data.url;
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Payment failed");
+      setPaymentProcessing(false);
+    }
+  }
+
+  async function handlePayIdConfirm() {
+    if (selectedPaymentIds.size === 0) return;
+    setPaymentProcessing(true);
+    try {
+      const res = await fetch("/api/payments/payid-confirm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ payment_ids: Array.from(selectedPaymentIds) }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      setPayIdRef(data.references || []);
+      toast.success("Payment marked as sent — awaiting admin confirmation");
+      setShowPayIdDialog(false);
+      setSelectedPaymentIds(new Set());
+      await fetchAll();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed");
+    }
+    setPaymentProcessing(false);
+  }
+
+  async function handleMarkPaidCash() {
+    if (selectedPaymentIds.size === 0) return;
+    setPaymentProcessing(true);
+    for (const payId of Array.from(selectedPaymentIds)) {
+      await supabase.from("payments").update({
+        payment_status: "paid",
+        amount_paid: allPayments.find((p) => p.id === payId)?.amount_due || 0,
+        payment_method: "cash",
+        pending_confirmation: false,
+      }).eq("id", payId);
+    }
+    toast.success(`${selectedPaymentIds.size} payment(s) marked as paid`);
+    setSelectedPaymentIds(new Set());
+    setPaymentProcessing(false);
+    await fetchAll();
+  }
+
   async function fetchAll() {
     if (!player) {
       setIsLoading(false);
@@ -192,8 +280,8 @@ export default function SessionDetailPage() {
       supabase.from("sessions").select("*").eq("id", id).single(),
       supabase.from("rsvps").select("*, player:players(*)").eq("session_id", id).order("rsvp_at"),
       supabase.from("teams").select("*").eq("session_id", id).order("team_name"),
-      supabase.from("payments").select("*").eq("session_id", id).eq("player_id", player.id).single(),
-      supabase.from("payments").select("payment_status").eq("session_id", id as string),
+      supabase.from("payments").select("*").eq("session_id", id).eq("player_id", player.id).maybeSingle(),
+      supabase.from("payments").select("*, player:players(name)").eq("session_id", id as string),
     ]);
 
     setSession(sessionRes.data as Session);
@@ -227,11 +315,29 @@ export default function SessionDetailPage() {
       setTeams([]);
     }
 
-    setMyPayment(paymentRes.data as Payment | null);
+    // Fetch all active players for search
+    const { data: activePlayers } = await supabase.from("players").select("*").eq("is_active", true).order("name");
+    setAllActivePlayers((activePlayers || []) as Player[]);
+
+    const myPay = paymentRes.data as Payment | null;
+    setMyPayment(myPay);
 
     if (paymentSummaryRes.data) {
-      const paid = paymentSummaryRes.data.filter((p: { payment_status: string }) => p.payment_status === "paid").length;
-      setPaymentSummary({ paid, total: paymentSummaryRes.data.length });
+      const paymentsWithPlayer = paymentSummaryRes.data.map((p: Record<string, unknown>) => ({
+        ...p,
+        player: p.player as { name: string } | undefined,
+      })) as (Payment & { player?: { name: string } })[];
+      setAllPayments(paymentsWithPlayer);
+      const paid = paymentsWithPlayer.filter((p) => p.payment_status === "paid").length;
+      setPaymentSummary({ paid, total: paymentsWithPlayer.length });
+
+      // Auto-select own unpaid payment
+      if (myPay && myPay.payment_status !== "paid" && !myPay.pending_confirmation) {
+        setSelectedPaymentIds((prev) => {
+          if (prev.size === 0) return new Set([myPay.id]);
+          return prev;
+        });
+      }
     }
 
     setIsLoading(false);
@@ -263,14 +369,54 @@ export default function SessionDetailPage() {
     <div className="space-y-4">
       <div className="flex items-start justify-between">
         <h2 className="text-xl font-bold">Session Details</h2>
-        <Badge className={
-          session.status === "upcoming" ? "bg-blue-100 text-blue-800" :
-          session.status === "cancelled" ? "bg-red-100 text-red-800" :
-          "bg-green-100 text-green-800"
-        }>
-          {session.status.replace(/_/g, " ")}
-        </Badge>
+        <div className="flex items-center gap-2">
+          <Badge className={
+            session.status === "upcoming" ? "bg-blue-100 text-blue-800" :
+            session.status === "cancelled" ? "bg-red-100 text-red-800" :
+            "bg-green-100 text-green-800"
+          }>
+            {session.status.replace(/_/g, " ")}
+          </Badge>
+          {isAdmin && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 text-xs"
+              onClick={() => window.location.href = `/admin/sessions/${session.id}`}
+            >
+              <Shield className="mr-1 h-3 w-3" /> Admin
+            </Button>
+          )}
+        </div>
       </div>
+
+      {/* Session Recap — completed sessions */}
+      {session.status === "completed" && paymentSummary.total > 0 && (() => {
+        const recapCollected = allPayments.reduce((s, p) => s + (Number(p.amount_paid) || 0), 0);
+        const recapDue = allPayments.reduce((s, p) => s + (Number(p.amount_due) || 0), 0);
+        const recapPct = paymentSummary.total > 0 ? (paymentSummary.paid / paymentSummary.total) * 100 : 0;
+        const recapBar = recapPct === 100 ? "bg-green-500" : recapPct >= 50 ? "bg-yellow-500" : "bg-red-500";
+        return (
+          <Card className="border-green-200 bg-green-50/50">
+            <CardContent className="p-4 space-y-2">
+              <p className="font-semibold text-sm">
+                Session Recap — {new Date(session.date).toLocaleDateString("en-AU", { weekday: "short", day: "numeric", month: "short" })}
+              </p>
+              <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                <span>{confirmed.length} players attended</span>
+                <span>{paymentSummary.paid}/{paymentSummary.total} paid</span>
+                <span>${recapCollected.toFixed(0)}/${recapDue.toFixed(0)}</span>
+              </div>
+              <div className="h-1.5 w-full rounded-full bg-gray-200 overflow-hidden">
+                <div className={`h-full rounded-full ${recapBar}`} style={{ width: `${recapPct}%` }} />
+              </div>
+              {recapDue - recapCollected > 0 && (
+                <p className="text-xs text-red-600">${(recapDue - recapCollected).toFixed(0)} outstanding</p>
+              )}
+            </CardContent>
+          </Card>
+        );
+      })()}
 
       {/* Session Info */}
       <Card>
@@ -391,50 +537,139 @@ export default function SessionDetailPage() {
       {/* Teams — shown when teams exist */}
       {teams.length > 0 && (
         <div className="space-y-3">
-          <h3 className="font-semibold">Teams</h3>
-          {teams.map((team) => (
-            <Card key={team.id}>
-              <CardHeader className="pb-2">
-                <div className="flex items-center justify-between">
-                  <CardTitle className="text-base">Team {team.team_name}</CardTitle>
+          {(() => { let playerNum = 0; return teams.map((team) => {
+            const teamPayments = allPayments.filter((pay) => team.players.some((p) => p.id === pay.player_id));
+            const teamPaid = teamPayments.filter((p) => p.payment_status === "paid").length;
+            const teamCollected = teamPayments.reduce((s, p) => s + (Number(p.amount_paid) || 0), 0);
+            const teamDue = teamPayments.reduce((s, p) => s + (Number(p.amount_due) || 0), 0);
+            const teamPct = teamPayments.length > 0 ? (teamPaid / teamPayments.length) * 100 : 0;
+            const teamBarColor = teamPct === 100 ? "bg-green-500" : teamPct >= 50 ? "bg-yellow-500" : "bg-red-500";
+            const teamStartNum = playerNum;
+            playerNum += team.players.length;
+
+            return (
+              <Card key={team.id}>
+                <CardHeader className="pb-2">
                   <div className="flex items-center gap-2">
-                    <div className={`h-6 w-6 rounded-full ${bibColors[team.bib_color] || "bg-gray-300"}`} />
-                    {team.avg_skill_rating && (
-                      <span className="text-xs text-muted-foreground">
-                        Avg: {Number(team.avg_skill_rating).toFixed(1)}
-                      </span>
+                    <div className={`h-5 w-5 rounded-full ${bibColors[team.bib_color] || "bg-gray-300"}`} />
+                    <CardTitle className="text-sm">Team {team.team_name}</CardTitle>
+                    {isAdmin && team.avg_skill_rating && (
+                      <span className="text-xs text-muted-foreground">Avg: {Number(team.avg_skill_rating).toFixed(1)}</span>
                     )}
                   </div>
-                </div>
-              </CardHeader>
-              <CardContent className="p-4 pt-0">
-                {team.players.map((p, idx) => (
-                  <div key={p.id} className="flex items-center justify-between py-1 text-sm border-b last:border-0">
-                    <span>
-                      <span className="text-muted-foreground w-6 inline-block">#{idx + 1}</span>
-                      {" "}{p.name}
-                    </span>
-                    {isAdmin && (
-                      <div className="flex items-center gap-1">
-                        {Array.from({ length: p.skill_rating || 0 }).map((_, i) => (
-                          <Star key={i} className="h-3 w-3 fill-yellow-400 text-yellow-400" />
-                        ))}
+                  {teamPayments.length > 0 && (
+                    <div className="pt-1">
+                      <div className="flex justify-between text-xs text-muted-foreground">
+                        <span>{teamPaid}/{teamPayments.length} paid</span>
+                        <span>${teamCollected.toFixed(0)}/${teamDue.toFixed(0)}{teamDue - teamCollected > 0 ? ` · $${(teamDue - teamCollected).toFixed(0)} left` : ""}</span>
                       </div>
-                    )}
-                  </div>
-                ))}
+                      <div className="h-1.5 w-full rounded-full bg-gray-200 overflow-hidden mt-1">
+                        <div className={`h-full rounded-full transition-all ${teamBarColor}`} style={{ width: `${teamPct}%` }} />
+                      </div>
+                    </div>
+                  )}
+                </CardHeader>
+                <CardContent className="p-4 pt-0">
+                  {team.players.map((p, idx) => {
+                    const teamPayment = allPayments.find((pay) => pay.player_id === p.id);
+                    const rowBg = p.is_admin
+                      ? "bg-purple-100"
+                      : p.player_type === "regular"
+                      ? "bg-blue-100"
+                      : "bg-orange-100";
+                    const isUnpaid = session.status !== "completed" && teamPayment && teamPayment.payment_status !== "paid" && !teamPayment.pending_confirmation;
+                    const isSelected = teamPayment ? selectedPaymentIds.has(teamPayment.id) : false;
+                    return (
+                      <div
+                        key={p.id}
+                        className={`flex items-center justify-between py-1 px-2 -mx-2 rounded text-sm ${rowBg} ${isUnpaid ? "cursor-pointer" : ""} ${isSelected ? "ring-1 ring-green-500" : ""}`}
+                        onClick={() => { if (isUnpaid && teamPayment) togglePaymentSelection(teamPayment.id); }}
+                      >
+                        <div className="flex items-center gap-2">
+                          {teamPayment && (
+                            isUnpaid ? (
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={() => togglePaymentSelection(teamPayment.id)}
+                                onClick={(e) => e.stopPropagation()}
+                                className="rounded h-3.5 w-3.5"
+                              />
+                            ) : (
+                              <div className="w-3.5" />
+                            )
+                          )}
+                          <span className="text-muted-foreground w-5">#{teamStartNum + idx + 1}</span>
+                          <span className={p.id === player?.id ? "font-semibold" : ""}>{p.name}</span>
+                          {p.id === session.court_payer_id && <Badge variant="outline" className="text-[10px] px-1">Court</Badge>}
+                        </div>
+                        <div className="flex items-center gap-1">
+                          {isAdmin && Array.from({ length: p.skill_rating || 0 }).map((_, i) => (
+                            <Star key={i} className="h-3 w-3 fill-yellow-400 text-yellow-400" />
+                          ))}
+                          {teamPayment && (
+                            <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${
+                              teamPayment.payment_status === "paid"
+                                ? "bg-green-100 text-green-800"
+                                : teamPayment.pending_confirmation
+                                ? "bg-yellow-100 text-yellow-800"
+                                : "bg-red-100 text-red-700"
+                            }`}>
+                              {teamPayment.pending_confirmation ? "Pending" : teamPayment.payment_status === "paid" ? "Paid" : "Unpaid"}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </CardContent>
+              </Card>
+            );
+          }); })()}
+
+          {/* Payment action bar — shown when players are selected */}
+          {selectedPaymentIds.size > 0 && (
+            <Card className="border-2 border-green-600">
+              <CardContent className="p-3 space-y-2">
+                <div className="flex justify-between text-sm">
+                  <span className="font-medium">{selectedPaymentIds.size} player{selectedPaymentIds.size !== 1 ? "s" : ""} selected</span>
+                  <span className="font-semibold">${selectedTotal.toFixed(2)}</span>
+                </div>
+                <div className="flex gap-2">
+                  <Button
+                    size="sm"
+                    className="flex-1 bg-purple-600 hover:bg-purple-700"
+                    onClick={handleStripeCheckout}
+                    disabled={paymentProcessing}
+                  >
+                    <CreditCard className="mr-1 h-3 w-3" />
+                    {paymentProcessing ? "..." : `Card $${selectedTotalWithFee.toFixed(2)}`}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="flex-1"
+                    onClick={() => setShowPayIdDialog(true)}
+                    disabled={paymentProcessing}
+                  >
+                    <Phone className="mr-1 h-3 w-3" />
+                    PayID
+                  </Button>
+                  {isAdmin && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="flex-1"
+                      onClick={handleMarkPaidCash}
+                      disabled={paymentProcessing}
+                    >
+                      {paymentProcessing ? "..." : "Cash"}
+                    </Button>
+                  )}
+                </div>
               </CardContent>
             </Card>
-          ))}
-        </div>
-      )}
-
-      {/* Player type legend */}
-      {teams.length === 0 && (
-        <div className="flex gap-3 text-xs">
-          <div className="flex items-center gap-1"><div className="h-3 w-3 rounded bg-purple-100 border" /> Admin</div>
-          <div className="flex items-center gap-1"><div className="h-3 w-3 rounded bg-blue-100 border" /> Regular</div>
-          <div className="flex items-center gap-1"><div className="h-3 w-3 rounded bg-orange-100 border" /> Casual</div>
+          )}
         </div>
       )}
 
@@ -450,6 +685,7 @@ export default function SessionDetailPage() {
             ) : (
               <div className="space-y-1">
                 {confirmed.map((r, idx) => {
+                  const confPayment = allPayments.find((pay) => pay.player_id === r.player_id);
                   const rowBg = r.player?.is_admin
                     ? "bg-purple-100"
                     : r.player?.player_type === "regular"
@@ -461,13 +697,22 @@ export default function SessionDetailPage() {
                       <span className="text-muted-foreground w-6 inline-block">#{idx + 1}</span>
                       {" "}{r.player?.name}
                     </span>
-                    {isAdmin && (
-                      <div className="flex items-center gap-1">
-                        {Array.from({ length: r.player?.skill_rating || 0 }).map((_, i) => (
-                          <Star key={i} className="h-3 w-3 fill-yellow-400 text-yellow-400" />
-                        ))}
-                      </div>
-                    )}
+                    <div className="flex items-center gap-1">
+                      {isAdmin && Array.from({ length: r.player?.skill_rating || 0 }).map((_, i) => (
+                        <Star key={i} className="h-3 w-3 fill-yellow-400 text-yellow-400" />
+                      ))}
+                      {confPayment && (
+                        <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${
+                          confPayment.payment_status === "paid"
+                            ? "bg-green-100 text-green-800"
+                            : confPayment.pending_confirmation
+                            ? "bg-yellow-100 text-yellow-800"
+                            : "bg-red-100 text-red-700"
+                        }`}>
+                          {confPayment.pending_confirmation ? "Pending" : confPayment.payment_status === "paid" ? "Paid" : "Unpaid"}
+                        </span>
+                      )}
+                    </div>
                   </div>
                   );
                 })}
@@ -477,12 +722,21 @@ export default function SessionDetailPage() {
         </Card>
       )}
 
+      {/* Player type legend */}
+      {(teams.length > 0 || confirmed.length > 0) && (
+        <div className="flex justify-center gap-4 text-xs">
+          <div className="flex items-center gap-1"><div className="h-3 w-3 rounded bg-purple-100 border" /> Admin</div>
+          <div className="flex items-center gap-1"><div className="h-3 w-3 rounded bg-blue-100 border" /> Regular</div>
+          <div className="flex items-center gap-1"><div className="h-3 w-3 rounded bg-orange-100 border" /> Casual</div>
+        </div>
+      )}
+
       {/* Waitlist */}
       <Card>
         <CardHeader className="pb-2">
           <div className="flex items-center justify-between">
             <CardTitle className="text-base">Waiting List ({waitlist.length})</CardTitle>
-            {session.status === "upcoming" && (
+            {(session.status === "upcoming" || (isAdmin && session.status !== "completed" && session.status !== "cancelled")) && (
               <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setShowAddWaitlist(!showAddWaitlist)}>
                 <UserPlus className="mr-1 h-3 w-3" /> Add
               </Button>
@@ -501,9 +755,25 @@ export default function SessionDetailPage() {
                 return (
                 <div key={r.id} className={`flex items-center justify-between py-1 px-2 -mx-2 rounded text-sm ${rowBg}`}>
                   <span>#{i + 1} {r.player?.name}</span>
-                  <Badge variant="outline" className="text-xs">
-                    {r.status === "confirmed" ? "Ready" : r.status}
-                  </Badge>
+                  <div className="flex items-center gap-1">
+                    {isAdmin && confirmed.length < maxPlayers && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-6 text-xs px-2 text-green-700"
+                        onClick={async () => {
+                          await supabase.from("rsvps").update({ is_waitlist: false, promoted_at: new Date().toISOString() }).eq("id", r.id);
+                          toast.success(`Promoted ${r.player?.name}`);
+                          await fetchAll();
+                        }}
+                      >
+                        Promote
+                      </Button>
+                    )}
+                    <Badge variant="outline" className="text-xs">
+                      {r.status === "confirmed" ? "Ready" : r.status}
+                    </Badge>
+                  </div>
                 </div>
                 );
               })}
@@ -512,131 +782,162 @@ export default function SessionDetailPage() {
           {waitlist.length === 0 && !showAddWaitlist && (
             <p className="text-sm text-muted-foreground">No one on the waitlist.</p>
           )}
-          {showAddWaitlist && (
-            <div className="space-y-3 border-t pt-3">
-              <div className="space-y-1">
-                <Label className="text-xs">Name *</Label>
-                <Input
-                  placeholder="Player name"
-                  value={waitlistForm.name}
-                  onChange={(e) => setWaitlistForm((f) => ({ ...f, name: e.target.value }))}
-                />
-              </div>
-              <div className="space-y-1">
-                <Label className="text-xs">Mobile *</Label>
-                <Input
-                  type="tel"
-                  placeholder="04XX XXX XXX"
-                  value={waitlistForm.mobile}
-                  onChange={(e) => setWaitlistForm((f) => ({ ...f, mobile: e.target.value }))}
-                />
-              </div>
-              <div className="space-y-1">
-                <Label className="text-xs">Email (optional)</Label>
-                <Input
-                  type="email"
-                  placeholder="email@example.com"
-                  value={waitlistForm.email}
-                  onChange={(e) => setWaitlistForm((f) => ({ ...f, email: e.target.value }))}
-                />
-              </div>
-              <div className="flex gap-2">
-                <Button size="sm" variant="outline" className="flex-1" onClick={() => setShowAddWaitlist(false)}>
-                  Cancel
-                </Button>
-                <Button
-                  size="sm"
-                  className="flex-1 bg-green-700 hover:bg-green-800"
-                  onClick={handleAddToWaitlist}
-                  disabled={addingToWaitlist || !waitlistForm.name || !waitlistForm.mobile}
-                >
-                  {addingToWaitlist ? "Adding..." : "Add to Waitlist"}
-                </Button>
-              </div>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+          {showAddWaitlist && (() => {
+            const availableForWl = allActivePlayers.filter((p) => !rsvps.some((r) => r.player_id === p.id));
+            const filteredForWl = availableForWl.filter((p) => p.name.toLowerCase().includes(playerWaitlistSearch.toLowerCase()));
 
-      <Separator />
+            async function addExistingToWaitlist(playerId: string) {
+              if (!session) return;
+              await supabase.from("rsvps").insert({
+                session_id: session.id,
+                player_id: playerId,
+                status: "confirmed",
+                rsvp_at: new Date().toISOString(),
+                is_waitlist: true,
+                waitlist_position: waitlist.length + 1,
+                promoted_at: null,
+              });
+              toast.success("Added to waitlist");
+              setPlayerWaitlistSearch("");
+              setPlayerWaitlistHighlight(-1);
+              await fetchAll();
+            }
 
-      {/* Payment Status */}
-      <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="text-base">Payment</CardTitle>
-        </CardHeader>
-        <CardContent className="p-4 pt-0 text-sm">
-          {isAdmin ? (() => {
-            const totalWithBuffer = session.court_cost * (1 + session.buffer_pct / 100);
-            const paidCount = paymentSummary.paid;
-            const totalCount = paymentSummary.total;
-            const pctPaid = totalCount > 0 ? (paidCount / totalCount) * 100 : 0;
-            const barColor = pctPaid === 100 ? "bg-green-500" : pctPaid >= 50 ? "bg-yellow-500" : "bg-red-500";
             return (
-              <div className="space-y-3">
-                <div className="grid grid-cols-3 text-center">
-                  <div>
-                    <p className="text-xs text-muted-foreground">Court</p>
-                    <p className="font-semibold">${session.court_cost.toFixed(0)}</p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-muted-foreground">+ {session.buffer_pct}% buffer</p>
-                    <p className="font-semibold">${totalWithBuffer.toFixed(0)}</p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-muted-foreground">Per Player</p>
-                    <p className="font-semibold">${costPerPlayer.toFixed(2)}</p>
-                  </div>
+              <div className="space-y-3 border-t pt-3">
+                {/* Search existing players */}
+                <div className="relative">
+                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+                  <input
+                    type="text"
+                    placeholder="Search existing player..."
+                    className="w-full pl-8 pr-3 py-2 text-sm rounded-md border bg-background focus:outline-none focus:ring-2 focus:ring-ring"
+                    value={playerWaitlistSearch}
+                    onChange={(e) => { setPlayerWaitlistSearch(e.target.value); setPlayerWaitlistHighlight(-1); }}
+                    onKeyDown={(e) => {
+                      if (!playerWaitlistSearch || filteredForWl.length === 0) return;
+                      if (e.key === "ArrowDown") { e.preventDefault(); setPlayerWaitlistHighlight((h) => Math.min(h + 1, filteredForWl.length - 1)); }
+                      else if (e.key === "ArrowUp") { e.preventDefault(); setPlayerWaitlistHighlight((h) => Math.max(h - 1, 0)); }
+                      else if (e.key === "Enter" && playerWaitlistHighlight >= 0) { e.preventDefault(); addExistingToWaitlist(filteredForWl[playerWaitlistHighlight].id); }
+                    }}
+                  />
                 </div>
-                <div>
-                  <div className="flex justify-between text-xs mb-1">
-                    <span>{paidCount} / {totalCount} players paid</span>
-                    <span>{Math.round(pctPaid)}%</span>
+                {playerWaitlistSearch && (
+                  <div className="border rounded-md max-h-[120px] overflow-y-auto">
+                    {filteredForWl.map((p, idx) => (
+                      <button
+                        key={p.id}
+                        className={`w-full text-left px-3 py-1.5 text-sm flex items-center justify-between border-b last:border-0 ${idx === playerWaitlistHighlight ? "bg-green-100" : "hover:bg-muted/50"}`}
+                        onClick={() => addExistingToWaitlist(p.id)}
+                        onMouseEnter={() => setPlayerWaitlistHighlight(idx)}
+                      >
+                        <span>{p.name}</span>
+                        <span className="text-xs text-muted-foreground">{p.player_type}</span>
+                      </button>
+                    ))}
+                    {filteredForWl.length === 0 && (
+                      <p className="text-xs text-muted-foreground py-2 text-center">No matching players</p>
+                    )}
                   </div>
-                  <div className="h-3 w-full rounded-full bg-gray-200 overflow-hidden">
-                    <div className={`h-full rounded-full transition-all ${barColor}`} style={{ width: `${pctPaid}%` }} />
-                  </div>
-                </div>
+                )}
+
+                {/* New player form toggle */}
                 <Button
                   size="sm"
                   variant="outline"
-                  className="w-full"
-                  onClick={() => window.location.href = `/admin/sessions/${session.id}`}
+                  className="w-full text-xs"
+                  onClick={() => setShowNewPlayerForm(!showNewPlayerForm)}
                 >
-                  Manage Payments
+                  <UserPlus className="mr-1 h-3 w-3" /> {showNewPlayerForm ? "Cancel" : "New player not in the system"}
                 </Button>
-              </div>
-            );
-          })() : player?.player_type === "regular" ? (() => {
-            const pctPaid = paymentSummary.total > 0 ? (paymentSummary.paid / paymentSummary.total) * 100 : 0;
-            const barColor = pctPaid === 100 ? "bg-green-500" : pctPaid >= 50 ? "bg-yellow-500" : "bg-red-500";
-            return (
-              <div>
-                <div className="flex justify-between text-xs mb-1">
-                  <span>{paymentSummary.paid} / {paymentSummary.total} players paid</span>
-                  <span>{Math.round(pctPaid)}%</span>
-                </div>
-                <div className="h-3 w-full rounded-full bg-gray-200 overflow-hidden">
-                  <div className={`h-full rounded-full transition-all ${barColor}`} style={{ width: `${pctPaid}%` }} />
-                </div>
-                {paymentSummary.total - paymentSummary.paid > 0 && (
-                  <p className="text-xs text-muted-foreground mt-1">{paymentSummary.total - paymentSummary.paid} outstanding</p>
+
+                {showNewPlayerForm && (
+                  <div className="space-y-2">
+                    <div className="space-y-1">
+                      <Label className="text-xs">Name *</Label>
+                      <Input placeholder="Player name" value={waitlistForm.name} onChange={(e) => setWaitlistForm((f) => ({ ...f, name: e.target.value }))} />
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs">Mobile *</Label>
+                      <Input type="tel" placeholder="04XX XXX XXX" value={waitlistForm.mobile} onChange={(e) => setWaitlistForm((f) => ({ ...f, mobile: e.target.value }))} />
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs">Email (optional)</Label>
+                      <Input type="email" placeholder="email@example.com" value={waitlistForm.email} onChange={(e) => setWaitlistForm((f) => ({ ...f, email: e.target.value }))} />
+                    </div>
+                    <Button
+                      size="sm"
+                      className="w-full bg-green-700 hover:bg-green-800"
+                      onClick={handleAddToWaitlist}
+                      disabled={addingToWaitlist || !waitlistForm.name || !waitlistForm.mobile}
+                    >
+                      {addingToWaitlist ? "Adding..." : "Add to Waitlist"}
+                    </Button>
+                  </div>
                 )}
               </div>
             );
-          })() : myPayment ? (
-            <div className="space-y-1">
-              <p>Amount Due: <span className="font-semibold">${myPayment.amount_due.toFixed(2)}</span></p>
-              <p>Amount Paid: <span className="font-semibold">${myPayment.amount_paid.toFixed(2)}</span></p>
-              <p>Status: <Badge variant={myPayment.payment_status === "paid" ? "default" : "destructive"}>
-                {myPayment.payment_status}
-              </Badge></p>
-            </div>
-          ) : (
-            <p className="text-muted-foreground">No payment info available.</p>
-          )}
+          })()}
         </CardContent>
       </Card>
+
+      {/* Cost Summary — shown when payments exist */}
+      {paymentSummary.total > 0 && (
+        <div className="text-xs text-muted-foreground text-center space-y-0.5">
+          <p>Court ${session.court_cost.toFixed(0)} + {session.buffer_pct}% buffer = ${(session.court_cost * (1 + session.buffer_pct / 100)).toFixed(0)} · ${costPerPlayer.toFixed(2)}/player</p>
+          <p>{paymentSummary.paid}/{paymentSummary.total} paid · ${allPayments.reduce((s, p) => s + (Number(p.amount_paid) || 0), 0).toFixed(0)}/${allPayments.reduce((s, p) => s + (Number(p.amount_due) || 0), 0).toFixed(0)}</p>
+        </div>
+      )}
+
+      {/* PayID Dialog */}
+      <Dialog open={showPayIdDialog} onOpenChange={setShowPayIdDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Pay via PayID</DialogTitle>
+            <DialogDescription>
+              Transfer the amount using your banking app, then confirm below.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 text-sm">
+            <div className="bg-muted rounded-md p-3 space-y-2">
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">PayID (Phone)</span>
+                <span className="font-mono font-semibold">{process.env.NEXT_PUBLIC_PAYID_PHONE || "Not configured"}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Amount</span>
+                <span className="font-semibold">${selectedTotal.toFixed(2)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">For</span>
+                <span className="text-right">{selectedPayments.map((p) => p.player?.name || "Unknown").join(", ")}</span>
+              </div>
+              {payIdRef.length > 0 && (
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Reference</span>
+                  <span className="font-mono font-semibold">{payIdRef.join(", ")}</span>
+                </div>
+              )}
+            </div>
+            <div className="text-xs text-muted-foreground space-y-1">
+              <p>1. Open your banking app</p>
+              <p>2. Pay to the PayID phone number above</p>
+              <p>3. Use the exact amount shown</p>
+              <p>4. Tap &quot;I&apos;ve Paid&quot; below</p>
+            </div>
+          </div>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setShowPayIdDialog(false)}>Cancel</Button>
+            <Button
+              onClick={handlePayIdConfirm}
+              disabled={paymentProcessing}
+              className="bg-green-700 hover:bg-green-800"
+            >
+              {paymentProcessing ? "Confirming..." : "I've Paid"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

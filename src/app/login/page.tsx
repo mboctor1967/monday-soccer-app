@@ -121,6 +121,10 @@ export default function LoginPage() {
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-green-900 via-green-800 to-emerald-900 p-4">
+      {/* TODO: RE-ENABLE AUTH — Remove this banner when OTP is back on */}
+      <div className="fixed top-0 left-0 right-0 bg-yellow-500 text-yellow-900 text-center text-xs font-semibold py-1 z-50">
+        DEV MODE — OTP disabled, enter any 6-digit code to log in
+      </div>
       <Card className="w-full max-w-md">
         <CardHeader className="text-center">
           <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-green-100">

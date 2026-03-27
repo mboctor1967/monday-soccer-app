@@ -9,8 +9,9 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
   Calendar, Users, DollarSign, Plus, AlertTriangle, CheckCircle,
-  TrendingUp, UserX
+  TrendingUp, UserX, Download
 } from "lucide-react";
+import { toast } from "sonner";
 import type { Session, Player } from "@/lib/types/database";
 
 interface PlayerAttendance {
@@ -35,7 +36,7 @@ interface DataQualityIssue {
 }
 
 export default function AdminDashboard() {
-  const { isAdmin } = useAuth();
+  const { isAdmin, isLoading: authLoading } = useAuth();
   const router = useRouter();
   const supabase = createClient();
 
@@ -48,12 +49,14 @@ export default function AdminDashboard() {
   const [totalOutstanding, setTotalOutstanding] = useState(0);
   const [sessionTrends, setSessionTrends] = useState<{ date: string; confirmed: number; max: number; waitlisted: number }[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isExporting, setIsExporting] = useState(false);
 
   useEffect(() => {
+    if (authLoading) return;
     if (!isAdmin) { router.push("/"); return; }
     fetchDashboard();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAdmin]);
+  }, [isAdmin, authLoading]);
 
   async function fetchDashboard() {
     const [sessionsRes, allPlayersRes, rsvpsRes, paymentsRes] = await Promise.all([
@@ -207,6 +210,25 @@ export default function AdminDashboard() {
     setSessionTrends(trends);
 
     setIsLoading(false);
+  }
+
+  async function handleExportExcel() {
+    setIsExporting(true);
+    try {
+      const res = await fetch("/api/export/csv");
+      if (!res.ok) throw new Error("Export failed");
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `monday-soccer-export-${new Date().toISOString().split("T")[0]}.xlsx`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success("Export downloaded");
+    } catch {
+      toast.error("Export failed");
+    }
+    setIsExporting(false);
   }
 
   const statusColor: Record<string, string> = {
@@ -611,6 +633,20 @@ export default function AdminDashboard() {
           </Card>
         </details>
       )}
+
+      {/* Export */}
+      <Card>
+        <CardContent className="p-4 flex items-center justify-between">
+          <div>
+            <p className="text-sm font-semibold">Export Data</p>
+            <p className="text-xs text-muted-foreground">Download attendance & payment history as Excel</p>
+          </div>
+          <Button variant="outline" size="sm" onClick={handleExportExcel} disabled={isExporting}>
+            <Download className="mr-1 h-4 w-4" />
+            {isExporting ? "Exporting..." : "Export Excel"}
+          </Button>
+        </CardContent>
+      </Card>
     </div>
   );
 }

@@ -19,7 +19,7 @@ import * as XLSX from "xlsx";
 import type { Player } from "@/lib/types/database";
 
 export default function AdminPlayersPage() {
-  const { isAdmin } = useAuth();
+  const { isAdmin, isLoading: authLoading } = useAuth();
   const router = useRouter();
   const supabase = createClient();
   const fileRef = useRef<HTMLInputElement>(null);
@@ -39,10 +39,11 @@ export default function AdminPlayersPage() {
   });
 
   useEffect(() => {
+    if (authLoading) return;
     if (!isAdmin) { router.push("/"); return; }
     fetchPlayers();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAdmin]);
+  }, [isAdmin, authLoading]);
 
   async function fetchPlayers() {
     const { data } = await supabase
@@ -106,17 +107,29 @@ export default function AdminPlayersPage() {
 
   async function handleDeletePlayer() {
     if (!deletePlayer) return;
-    // Delete related data first
-    const { data: rsvps } = await supabase.from("rsvps").select("id").eq("player_id", deletePlayer.id);
-    if (rsvps && rsvps.length > 0) {
-      await supabase.from("rsvps").delete().eq("player_id", deletePlayer.id);
-    }
-    await supabase.from("payments").delete().eq("player_id", deletePlayer.id);
-    const { error } = await supabase.from("players").delete().eq("id", deletePlayer.id);
-    if (error) {
-      toast.error("Failed to delete player. They may be referenced in sessions.");
+
+    // Check if player has any history
+    const [rsvpRes, paymentRes] = await Promise.all([
+      supabase.from("rsvps").select("id", { count: "exact", head: true }).eq("player_id", deletePlayer.id),
+      supabase.from("payments").select("id", { count: "exact", head: true }).eq("player_id", deletePlayer.id),
+    ]);
+    const hasHistory = (rsvpRes.count || 0) > 0 || (paymentRes.count || 0) > 0;
+
+    if (hasHistory) {
+      // Deactivate instead — preserve history
+      await supabase.from("players").update({ is_active: false }).eq("id", deletePlayer.id);
+      toast.success(`${deletePlayer.name} deactivated (history preserved)`);
     } else {
-      toast.success(`${deletePlayer.name} deleted`);
+      // No history — safe to hard delete
+      await supabase.from("notifications").delete().eq("player_id", deletePlayer.id);
+      const { error } = await supabase.from("players").delete().eq("id", deletePlayer.id);
+      if (error) {
+        // Fallback to deactivate
+        await supabase.from("players").update({ is_active: false }).eq("id", deletePlayer.id);
+        toast.success(`${deletePlayer.name} deactivated`);
+      } else {
+        toast.success(`${deletePlayer.name} deleted`);
+      }
     }
     setDeletePlayer(null);
     fetchPlayers();

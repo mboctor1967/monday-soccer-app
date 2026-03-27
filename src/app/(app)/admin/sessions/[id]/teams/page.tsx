@@ -109,7 +109,38 @@ export default function TeamGenerationPage() {
 
     await supabase.from("sessions").update({ status: "teams_published" }).eq("id", id);
 
-    toast.success("Teams published!");
+    // Auto-create payment records for all confirmed players
+    const maxPlayers = session.format === "3t" ? 15 : 10;
+    const costPerPlayer = session.court_cost * (1 + session.buffer_pct / 100) / maxPlayers;
+    const allTeamPlayerIds = teams.flatMap((t) => t.players.map((p) => p.id));
+
+    // Check for existing payments to avoid duplicates
+    const { data: existingPayments } = await supabase
+      .from("payments")
+      .select("player_id")
+      .eq("session_id", session.id);
+    const existingPlayerIds = new Set((existingPayments || []).map((p) => p.player_id));
+
+    const newPayments = allTeamPlayerIds
+      .filter((playerId) => !existingPlayerIds.has(playerId))
+      .map((playerId) => {
+        const isCourtPayer = playerId === session.court_payer_id;
+        return {
+          session_id: session.id,
+          player_id: playerId,
+          amount_due: costPerPlayer,
+          amount_paid: isCourtPayer ? costPerPlayer : 0,
+          payment_status: (isCourtPayer ? "paid" : "unpaid") as "paid" | "unpaid",
+          payment_method: null,
+          notes: null,
+        };
+      });
+
+    if (newPayments.length > 0) {
+      await supabase.from("payments").insert(newPayments);
+    }
+
+    toast.success(`Teams published! ${newPayments.length} payment records created.`);
     router.push(`/admin/sessions/${id}`);
     setIsPublishing(false);
   }

@@ -3,12 +3,10 @@ import twilio from "twilio";
 import { createServiceRoleClient } from "@/lib/supabase/server";
 import crypto from "crypto";
 
+const DEV_SKIP_OTP = process.env.DEV_SKIP_OTP === "true";
+
 export async function POST(request: NextRequest) {
   try {
-    const twilioClient = twilio(
-      process.env.TWILIO_ACCOUNT_SID!,
-      process.env.TWILIO_AUTH_TOKEN!
-    );
     const { mobile, code } = await request.json();
 
     if (!mobile || !code) {
@@ -17,16 +15,25 @@ export async function POST(request: NextRequest) {
 
     const formattedMobile = mobile.startsWith("+61") ? mobile : `+61${mobile.replace(/^0/, "")}`;
 
-    // Verify OTP with Twilio
-    const verificationCheck = await twilioClient.verify.v2
-      .services(process.env.TWILIO_VERIFY_SERVICE_SID!)
-      .verificationChecks.create({
-        to: formattedMobile,
-        code,
-      });
+    if (DEV_SKIP_OTP) {
+      console.warn("[DEV] OTP verification skipped — any 6-digit code accepted");
+    } else {
+      const twilioClient = twilio(
+        process.env.TWILIO_ACCOUNT_SID!,
+        process.env.TWILIO_AUTH_TOKEN!
+      );
 
-    if (verificationCheck.status !== "approved") {
-      return NextResponse.json({ error: "Invalid or expired code" }, { status: 401 });
+      // Verify OTP with Twilio
+      const verificationCheck = await twilioClient.verify.v2
+        .services(process.env.TWILIO_VERIFY_SERVICE_SID!)
+        .verificationChecks.create({
+          to: formattedMobile,
+          code,
+        });
+
+      if (verificationCheck.status !== "approved") {
+        return NextResponse.json({ error: "Invalid or expired code" }, { status: 401 });
+      }
     }
 
     // OTP verified — find or create user in Supabase

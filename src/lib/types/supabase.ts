@@ -114,37 +114,55 @@ export type Database = {
         Row: {
           amount_due: number
           amount_paid: number
+          chase_paused: boolean
           created_at: string
           id: string
+          last_chased_at: string | null
           notes: string | null
           payment_method: string | null
+          payment_reference: string | null
           payment_status: string
+          pending_confirmation: boolean
           player_id: string
           session_id: string
+          stripe_checkout_session_id: string | null
+          stripe_payment_intent_id: string | null
           updated_at: string
         }
         Insert: {
           amount_due?: number
           amount_paid?: number
+          chase_paused?: boolean
           created_at?: string
           id?: string
+          last_chased_at?: string | null
           notes?: string | null
           payment_method?: string | null
+          payment_reference?: string | null
           payment_status?: string
+          pending_confirmation?: boolean
           player_id: string
           session_id: string
+          stripe_checkout_session_id?: string | null
+          stripe_payment_intent_id?: string | null
           updated_at?: string
         }
         Update: {
           amount_due?: number
           amount_paid?: number
+          chase_paused?: boolean
           created_at?: string
           id?: string
+          last_chased_at?: string | null
           notes?: string | null
           payment_method?: string | null
+          payment_reference?: string | null
           payment_status?: string
+          pending_confirmation?: boolean
           player_id?: string
           session_id?: string
+          stripe_checkout_session_id?: string | null
+          stripe_payment_intent_id?: string | null
           updated_at?: string
         }
         Relationships: [

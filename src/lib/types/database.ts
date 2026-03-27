@@ -1,7 +1,8 @@
 export type PlayerType = "regular" | "casual";
 export type RsvpStatus = "confirmed" | "absent" | "maybe";
 export type SessionStatus = "upcoming" | "signups_closed" | "teams_published" | "completed" | "cancelled";
-export type PaymentStatus = "unpaid" | "paid";
+export type PaymentStatus = "unpaid" | "paid" | "pending_confirmation";
+export type PaymentMethod = "stripe" | "payid" | "cash" | null;
 export type NotificationChannel = "sms" | "push" | "email" | "whatsapp";
 export type SessionFormat = "2t" | "3t";
 
@@ -71,8 +72,14 @@ export interface Payment {
   amount_due: number;
   amount_paid: number;
   payment_status: PaymentStatus;
-  payment_method: string | null;
+  payment_method: PaymentMethod;
   notes: string | null;
+  stripe_checkout_session_id: string | null;
+  stripe_payment_intent_id: string | null;
+  payment_reference: string | null;
+  pending_confirmation: boolean;
+  chase_paused: boolean;
+  last_chased_at: string | null;
   created_at: string;
   updated_at: string;
 }
