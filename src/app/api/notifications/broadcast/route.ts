@@ -8,7 +8,7 @@ export async function POST(request: NextRequest) {
       process.env.TWILIO_ACCOUNT_SID!,
       process.env.TWILIO_AUTH_TOKEN!
     );
-    const { message, session_id, player_ids } = await request.json();
+    const { message, session_id, player_ids, channel = "whatsapp" } = await request.json();
     const supabase = createServiceRoleClient();
 
     // Get players to notify
@@ -22,20 +22,32 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "No players to notify" }, { status: 400 });
     }
 
+    const whatsappFrom = `whatsapp:${process.env.TWILIO_WHATSAPP_NUMBER || "+14155238886"}`;
+    const smsFrom = process.env.TWILIO_PHONE_NUMBER || undefined;
+    const smsMessagingService = process.env.TWILIO_MESSAGING_SERVICE_SID || undefined;
+
     let sent = 0;
     for (const player of players) {
       try {
-        await twilioClient.messages.create({
-          body: message,
-          to: player.mobile,
-          from: process.env.TWILIO_PHONE_NUMBER || undefined,
-          messagingServiceSid: process.env.TWILIO_MESSAGING_SERVICE_SID || undefined,
-        });
+        if (channel === "whatsapp") {
+          await twilioClient.messages.create({
+            body: message,
+            to: `whatsapp:${player.mobile}`,
+            from: whatsappFrom,
+          });
+        } else {
+          await twilioClient.messages.create({
+            body: message,
+            to: player.mobile,
+            from: smsFrom,
+            messagingServiceSid: smsMessagingService,
+          });
+        }
 
         await supabase.from("notifications").insert({
           player_id: player.id,
           session_id: session_id || null,
-          channel: "sms",
+          channel: channel,
           message,
           sent_at: new Date().toISOString(),
           status: "sent",
@@ -43,12 +55,12 @@ export async function POST(request: NextRequest) {
 
         sent++;
       } catch (err) {
-        console.error(`Failed to SMS ${player.name}:`, err);
+        console.error(`Failed to ${channel} ${player.name}:`, err);
         await supabase.from("notifications").insert({
           player_id: player.id,
           session_id: session_id || null,
-          channel: "sms",
-          message,
+          channel: channel === "whatsapp" ? "sms" : "sms",
+          message: `[${channel.toUpperCase()}] ${message}`,
           sent_at: new Date().toISOString(),
           status: "failed",
         });

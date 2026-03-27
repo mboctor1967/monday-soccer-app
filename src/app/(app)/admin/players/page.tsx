@@ -14,7 +14,7 @@ import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { Plus, Search, Star, Upload, UserX, UserCheck, Trash2 } from "lucide-react";
+import { Download, Plus, Search, Star, Upload, UserX, UserCheck, Trash2 } from "lucide-react";
 import * as XLSX from "xlsx";
 import type { Player } from "@/lib/types/database";
 
@@ -185,6 +185,28 @@ export default function AdminPlayersPage() {
       <div className="flex items-center justify-between">
         <h2 className="text-xl font-bold">Players ({activePlayers.length})</h2>
         <div className="flex gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={async () => {
+              try {
+                const res = await fetch("/api/export/csv");
+                if (!res.ok) throw new Error("Export failed");
+                const blob = await res.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = "monday-soccer-export.csv";
+                a.click();
+                URL.revokeObjectURL(url);
+                toast.success("CSV exported");
+              } catch {
+                toast.error("Failed to export CSV");
+              }
+            }}
+          >
+            <Download className="mr-1 h-4 w-4" /> Export
+          </Button>
           <Button size="sm" variant="outline" onClick={() => fileRef.current?.click()}>
             <Upload className="mr-1 h-4 w-4" /> Import
           </Button>

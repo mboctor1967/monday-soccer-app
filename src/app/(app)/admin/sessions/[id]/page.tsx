@@ -19,9 +19,13 @@ import {
 } from "@/components/ui/dialog";
 import {
   Calendar, Clock, MapPin, Users, DollarSign, Lock, UserPlus,
-  Shuffle, Send, XCircle, Star, Edit, Trash2
+  Shuffle, Send, XCircle, Star, Edit, Trash2, Copy, MessageSquare
 } from "lucide-react";
-import type { Session, Rsvp, Player, Payment } from "@/lib/types/database";
+import type { Session, Rsvp, Player, Payment, Team } from "@/lib/types/database";
+
+interface TeamWithPlayers extends Team {
+  players: Player[];
+}
 
 export default function AdminSessionDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -33,10 +37,16 @@ export default function AdminSessionDetailPage() {
   const [rsvps, setRsvps] = useState<(Rsvp & { player: Player })[]>([]);
   const [payments, setPayments] = useState<(Payment & { player?: Player })[]>([]);
   const [allPlayers, setAllPlayers] = useState<Player[]>([]);
+  const [teams, setTeams] = useState<TeamWithPlayers[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState("");
   const [showNewPlayerForm, setShowNewPlayerForm] = useState(false);
   const [newPlayerForm, setNewPlayerForm] = useState({ name: "", mobile: "", email: "" });
+  const [showMessage, setShowMessage] = useState(false);
+  const [msgText, setMsgText] = useState("");
+  const [msgChannel, setMsgChannel] = useState<"whatsapp" | "sms">("whatsapp");
+  const [msgSending, setMsgSending] = useState(false);
+  const [removeConfirm, setRemoveConfirm] = useState<{rsvpId: string; name: string} | null>(null);
 
   useEffect(() => {
     if (!isAdmin) { router.push("/"); return; }
@@ -69,6 +79,27 @@ export default function AdminSessionDetailPage() {
       player: p.player as unknown as Player,
     })) as (Payment & { player?: Player })[]);
     setAllPlayers((playersRes.data || []) as Player[]);
+
+    // Fetch teams if published
+    const { data: teamsData } = await supabase.from("teams").select("*").eq("session_id", id).order("team_name");
+    if (teamsData && teamsData.length > 0) {
+      const teamIds = teamsData.map((t) => t.id);
+      const { data: teamPlayers } = await supabase
+        .from("team_players")
+        .select("*, player:players(*)")
+        .in("team_id", teamIds);
+
+      const teamsWithPlayers: TeamWithPlayers[] = (teamsData as Team[]).map((team) => ({
+        ...team,
+        players: (teamPlayers || [])
+          .filter((tp: Record<string, unknown>) => tp.team_id === team.id)
+          .map((tp: Record<string, unknown>) => tp.player as unknown as Player),
+      }));
+      setTeams(teamsWithPlayers);
+    } else {
+      setTeams([]);
+    }
+
     setIsLoading(false);
   }
 
@@ -279,6 +310,100 @@ export default function AdminSessionDetailPage() {
     await fetchAll();
   }
 
+  function generateSessionSummary() {
+    if (!session) return "";
+    const conf = rsvps.filter((r) => r.status === "confirmed" && !r.is_waitlist);
+    const wl = rsvps.filter((r) => r.is_waitlist);
+    const max = session.format === "3t" ? 15 : 10;
+    const paidCount = payments.filter((p) => p.payment_status === "paid").length;
+
+    const getPaymentStatus = (playerId: string) => {
+      if (playerId === session.court_payer_id) return "💳";
+      const p = payments.find((pay) => pay.player_id === playerId);
+      if (!p) return "";
+      return p.payment_status === "paid" ? "✅" : "❌";
+    };
+
+    const sessionDate = new Date(session.date).toLocaleDateString("en-AU", {
+      weekday: "long", day: "numeric", month: "long",
+    });
+
+    let msg = `⚽ *Monday Night Soccer*\n`;
+    msg += `📅 ${sessionDate}\n`;
+    msg += `📍 ${session.venue}\n`;
+    msg += `🕗 ${session.start_time} – ${session.end_time}\n`;
+    msg += `🏟️ ${session.format === "3t" ? "3 teams (15 players)" : "2 teams (10 players)"}\n`;
+
+    // Teams (if published)
+    if (teams.length > 0) {
+      msg += "\n";
+      teams.forEach((team) => {
+        msg += `\n🎽 *Team ${team.team_name} (${team.bib_color}):*\n`;
+        team.players.forEach((p, i) => {
+          const pay = getPaymentStatus(p.id);
+          msg += `${i + 1}. ${p.name}${pay ? " " + pay : ""}\n`;
+        });
+      });
+      if (payments.length > 0) {
+        msg += `\n💰 ${paidCount}/${payments.length} paid · ✅ paid · ❌ unpaid · 💳 court payer\n`;
+      }
+    } else {
+      // No teams yet — show confirmed list
+      msg += "\n";
+      msg += `✅ *Confirmed (${conf.length}/${max}):*\n`;
+      conf.forEach((r, i) => {
+        const pay = getPaymentStatus(r.player_id);
+        msg += `${i + 1}. ${r.player?.name}${pay ? " " + pay : ""}\n`;
+      });
+
+      if (wl.length > 0) {
+        msg += `\n⏳ *Waitlist (${wl.length}):*\n`;
+        wl.forEach((r, i) => { msg += `${i + 1}. ${r.player?.name}\n`; });
+      }
+
+      if (conf.length < max) {
+        const spots = max - conf.length;
+        msg += `\n🔔 *${spots} spot${spots !== 1 ? "s" : ""} available!*\n`;
+      }
+
+      if (payments.length > 0) {
+        msg += `\n💰 ${paidCount}/${payments.length} paid · ✅ paid · ❌ unpaid · 💳 court payer\n`;
+      }
+    }
+
+    msg += `\n👉 RSVP: ${process.env.NEXT_PUBLIC_APP_URL || "https://monday-soccer-app.vercel.app"}`;
+    return msg;
+  }
+
+  async function handleSendMessage() {
+    if (!session || !msgText.trim()) return;
+    setMsgSending(true);
+
+    const conf = rsvps.filter((r) => r.status === "confirmed" && !r.is_waitlist);
+    const playerIds = conf.map((r) => r.player_id);
+
+    try {
+      const res = await fetch("/api/notifications/broadcast", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message: msgText.trim(),
+          player_ids: playerIds,
+          session_id: session.id,
+          channel: msgChannel,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      toast.success(`Sent to ${data.sent}/${data.total} players via ${msgChannel === "whatsapp" ? "WhatsApp" : "SMS"}`);
+      setMsgText("");
+      setShowMessage(false);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to send");
+    }
+    setMsgSending(false);
+  }
+
   if (isLoading || !session) {
     return <div className="flex items-center justify-center py-12"><div className="h-8 w-8 animate-spin rounded-full border-4 border-green-700 border-t-transparent" /></div>;
   }
@@ -403,8 +528,88 @@ export default function AdminSessionDetailPage() {
         <div className="flex items-center gap-1"><div className="h-3 w-3 rounded bg-orange-100 border" /> Casual</div>
       </div>
 
-      {/* Confirmed Players */}
-      <Card>
+      {/* Published Teams */}
+      {teams.length > 0 && (
+        <div className="space-y-3">
+          <h3 className="font-semibold text-sm">Teams</h3>
+          {teams.map((team) => {
+            const bibColors: Record<string, string> = {
+              White: "bg-white text-black border",
+              Black: "bg-gray-900 text-white",
+              Red: "bg-red-600 text-white",
+              Blue: "bg-blue-600 text-white",
+              Yellow: "bg-yellow-400 text-black",
+              Green: "bg-green-600 text-white",
+            };
+            return (
+              <Card key={team.id}>
+                <CardHeader className="pb-2">
+                  <div className="flex items-center gap-2">
+                    <div className={`h-5 w-5 rounded-full ${bibColors[team.bib_color] || "bg-gray-300"}`} />
+                    <CardTitle className="text-sm">Team {team.team_name}</CardTitle>
+                    {team.avg_skill_rating && (
+                      <span className="text-xs text-muted-foreground">Avg: {Number(team.avg_skill_rating).toFixed(1)}</span>
+                    )}
+                  </div>
+                </CardHeader>
+                <CardContent className="p-4 pt-0">
+                  {team.players.map((p, idx) => {
+                    const playerPayment = payments.find((pay) => pay.player_id === p.id);
+                    const isCourtPayer = p.id === session.court_payer_id;
+                    const rowBg = p.is_admin
+                      ? "bg-purple-100"
+                      : p.player_type === "regular"
+                      ? "bg-blue-100"
+                      : "bg-orange-100";
+                    return (
+                      <div key={p.id} className={`flex items-center justify-between py-1 px-2 -mx-2 rounded text-sm ${rowBg}`}>
+                        <div className="flex items-center gap-2">
+                          <span className="text-muted-foreground w-5">#{idx + 1}</span>
+                          <span>{p.name}</span>
+                          {isCourtPayer && <Badge variant="outline" className="text-xs">Court Payer</Badge>}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {Array.from({ length: p.skill_rating || 0 }).map((_, i) => (
+                            <Star key={i} className="h-3 w-3 fill-yellow-400 text-yellow-400" />
+                          ))}
+                          {playerPayment && (
+                            isCourtPayer ? (
+                              <Badge className="text-xs bg-green-100 text-green-800 w-16 justify-center">Paid</Badge>
+                            ) : (
+                              <Select value={playerPayment.payment_status} onValueChange={(v) => v && handlePaymentUpdate(playerPayment.id, v)}>
+                                <SelectTrigger className={`w-16 h-7 text-xs ${
+                                  playerPayment.payment_status === "paid" ? "text-green-700" : "text-red-700"
+                                }`}>
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="unpaid">Unpaid</SelectItem>
+                                  <SelectItem value="paid">Paid</SelectItem>
+                                </SelectContent>
+                              </Select>
+                            )
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </CardContent>
+              </Card>
+            );
+          })}
+          <Button
+            size="sm"
+            variant="outline"
+            className="w-full"
+            onClick={() => router.push(`/admin/sessions/${id}/teams`)}
+          >
+            <Shuffle className="mr-1 h-4 w-4" /> Regenerate Teams
+          </Button>
+        </div>
+      )}
+
+      {/* Confirmed Players — hide when teams are shown */}
+      {teams.length === 0 && (<Card>
         <CardHeader className="pb-2">
           <div className="flex items-center justify-between">
             <CardTitle className="text-base">Confirmed ({confirmed.length}/{maxPlayers})</CardTitle>
@@ -448,7 +653,7 @@ export default function AdminSessionDetailPage() {
                 <div className="flex items-center gap-1 min-w-0">
                   {session.status === "upcoming" && (
                     <button
-                      onClick={() => handleRemovePlayer(r.id, r.player?.name || "Player")}
+                      onClick={() => setRemoveConfirm({rsvpId: r.id, name: r.player?.name || "Player"})}
                       className="text-muted-foreground hover:text-red-600 shrink-0"
                     >
                       <XCircle className="h-4 w-4" />
@@ -485,7 +690,7 @@ export default function AdminSessionDetailPage() {
             );
           })}
         </CardContent>
-      </Card>
+      </Card>)}
 
       {/* Add Player to Session */}
       {session.status === "upcoming" && (
@@ -572,7 +777,7 @@ export default function AdminSessionDetailPage() {
               <div key={r.id} className={`flex items-center justify-between py-1 px-2 -mx-2 rounded text-sm border-b last:border-0 ${rowBg}`}>
                 <div className="flex items-center gap-1">
                   <button
-                    onClick={() => handleRemovePlayer(r.id, r.player?.name || "Player")}
+                    onClick={() => setRemoveConfirm({rsvpId: r.id, name: r.player?.name || "Player"})}
                     className="text-muted-foreground hover:text-red-600"
                   >
                     <XCircle className="h-4 w-4" />
@@ -693,6 +898,120 @@ export default function AdminSessionDetailPage() {
           <Send className="mr-2 h-4 w-4" /> Send Payment Follow-up
         </Button>
       )}
+
+      {/* Session Message */}
+      <Card>
+        <CardHeader className="pb-2">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-base flex items-center gap-2">
+              <MessageSquare className="h-4 w-4" /> Message
+            </CardTitle>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 text-xs"
+              onClick={() => {
+                setShowMessage(!showMessage);
+                if (!showMessage && !msgText) {
+                  setMsgText(generateSessionSummary());
+                }
+              }}
+            >
+              {showMessage ? "Close" : "Compose"}
+            </Button>
+          </div>
+        </CardHeader>
+        {showMessage && (
+          <CardContent className="p-4 pt-0 space-y-3">
+            <div className="flex gap-1">
+              <Button
+                size="sm"
+                variant="outline"
+                className="text-xs h-7"
+                onClick={() => setMsgText(generateSessionSummary())}
+              >
+                Generate Summary
+              </Button>
+            </div>
+            <textarea
+              className="w-full rounded-md border bg-background px-3 py-2 text-sm min-h-[120px] resize-none focus:outline-none focus:ring-2 focus:ring-ring whitespace-pre-wrap"
+              placeholder="Type your message..."
+              value={msgText}
+              onChange={(e) => setMsgText(e.target.value)}
+            />
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-muted-foreground">
+                  {rsvps.filter((r) => r.status === "confirmed" && !r.is_waitlist).length} recipients
+                </span>
+                <div className="flex gap-1">
+                  <Button
+                    size="sm"
+                    variant={msgChannel === "whatsapp" ? "default" : "outline"}
+                    className={`h-6 text-xs px-2 ${msgChannel === "whatsapp" ? "bg-green-700 hover:bg-green-800" : ""}`}
+                    onClick={() => setMsgChannel("whatsapp")}
+                  >
+                    WhatsApp
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant={msgChannel === "sms" ? "default" : "outline"}
+                    className={`h-6 text-xs px-2 ${msgChannel === "sms" ? "bg-blue-700 hover:bg-blue-800" : ""}`}
+                    onClick={() => setMsgChannel("sms")}
+                  >
+                    SMS
+                  </Button>
+                </div>
+              </div>
+              <div className="flex gap-1">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    navigator.clipboard.writeText(msgText.trim());
+                    toast.success("Copied to clipboard");
+                  }}
+                  disabled={!msgText.trim()}
+                >
+                  <Copy className="mr-1 h-4 w-4" /> Copy
+                </Button>
+                <Button
+                  size="sm"
+                  className="bg-green-700 hover:bg-green-800"
+                  onClick={handleSendMessage}
+                  disabled={msgSending || !msgText.trim()}
+                >
+                  <Send className="mr-1 h-4 w-4" />
+                  {msgSending ? "Sending..." : "Send"}
+                </Button>
+              </div>
+            </div>
+          </CardContent>
+        )}
+      </Card>
+
+      {/* Remove Player Confirmation */}
+      <Dialog open={removeConfirm !== null} onOpenChange={(open) => { if (!open) setRemoveConfirm(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Remove Player</DialogTitle>
+            <DialogDescription>
+              Remove {removeConfirm?.name} from this session?
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setRemoveConfirm(null)}>Cancel</Button>
+            <Button variant="destructive" onClick={() => {
+              if (removeConfirm) {
+                handleRemovePlayer(removeConfirm.rsvpId, removeConfirm.name);
+                setRemoveConfirm(null);
+              }
+            }}>
+              Remove
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

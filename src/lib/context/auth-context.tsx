@@ -12,6 +12,7 @@ interface AuthContextValue {
   isAdmin: boolean;
   isLoading: boolean;
   signOut: () => Promise<void>;
+  refreshPlayer: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue>({
@@ -20,6 +21,7 @@ const AuthContext = createContext<AuthContextValue>({
   isAdmin: false,
   isLoading: true,
   signOut: async () => {},
+  refreshPlayer: async () => {},
 });
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -86,6 +88,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setPlayer(null);
   };
 
+  const refreshPlayer = async () => {
+    if (user) {
+      const playerData = await loadPlayer(user.id);
+      setPlayer(playerData);
+    }
+  };
+
   return (
     <AuthContext.Provider
       value={{
@@ -94,6 +103,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         isAdmin: player?.is_admin ?? false,
         isLoading,
         signOut,
+        refreshPlayer,
       }}
     >
       {children}

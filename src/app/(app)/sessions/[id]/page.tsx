@@ -10,6 +10,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
+import {
+  Dialog, DialogContent, DialogDescription, DialogFooter,
+  DialogHeader, DialogTitle
+} from "@/components/ui/dialog";
 import { toast } from "sonner";
 import { Calendar, Clock, MapPin, Users, DollarSign, Star, LogOut, UserPlus } from "lucide-react";
 import type { Session, Rsvp, Player, Team, Payment } from "@/lib/types/database";
@@ -30,9 +34,11 @@ export default function SessionDetailPage() {
   const [paymentSummary, setPaymentSummary] = useState({ paid: 0, total: 0 });
   const [isLoading, setIsLoading] = useState(true);
   const [withdrawing, setWithdrawing] = useState(false);
+  const [showWithdrawConfirm, setShowWithdrawConfirm] = useState(false);
   const [showAddWaitlist, setShowAddWaitlist] = useState(false);
   const [waitlistForm, setWaitlistForm] = useState({ name: "", mobile: "", email: "" });
   const [addingToWaitlist, setAddingToWaitlist] = useState(false);
+  const [rsvpLoading, setRsvpLoading] = useState(false);
 
   async function handleWithdraw() {
     if (!player || !session) return;
@@ -118,6 +124,48 @@ export default function SessionDetailPage() {
     setShowAddWaitlist(false);
     setAddingToWaitlist(false);
     await fetchAll();
+  }
+
+  async function handleRsvp(status: "confirmed" | "absent" | "maybe") {
+    if (!player || !session) return;
+    setRsvpLoading(true);
+
+    const myRsvp = rsvps.find((r) => r.player_id === player.id);
+
+    if (myRsvp) {
+      await supabase
+        .from("rsvps")
+        .update({ status, rsvp_at: new Date().toISOString() })
+        .eq("id", myRsvp.id);
+    } else {
+      const sessionMaxPlayers = session.format === "3t" ? 15 : 10;
+      const confirmedCount = rsvps.filter((r) => r.status === "confirmed" && !r.is_waitlist).length;
+      const isFull = status === "confirmed" && confirmedCount >= sessionMaxPlayers;
+      let waitlistPosition = null;
+      if (isFull) {
+        const { count } = await supabase
+          .from("rsvps")
+          .select("*", { count: "exact", head: true })
+          .eq("session_id", session.id)
+          .eq("is_waitlist", true);
+        waitlistPosition = (count || 0) + 1;
+      }
+
+      await supabase.from("rsvps").insert({
+        session_id: session.id,
+        player_id: player.id,
+        status,
+        rsvp_at: new Date().toISOString(),
+        is_waitlist: isFull,
+        waitlist_position: waitlistPosition,
+        promoted_at: null,
+      });
+    }
+
+    const label = status === "confirmed" ? "I'm In" : status === "maybe" ? "Maybe" : "Can't Make It";
+    toast.success(`RSVP updated: ${label}`);
+    await fetchAll();
+    setRsvpLoading(false);
   }
 
   useEffect(() => {
@@ -251,19 +299,94 @@ export default function SessionDetailPage() {
         </CardContent>
       </Card>
 
+      {/* RSVP Status & Buttons */}
+      {session.status === "upcoming" && player && (() => {
+        const myRsvp = rsvps.find((r) => r.player_id === player.id);
+        const rsvpStatusLabel: Record<string, string> = {
+          confirmed: "I'm In",
+          absent: "Can't Make It",
+          maybe: "Maybe",
+        };
+        return (
+          <div className="space-y-3">
+            {myRsvp && (
+              <div className={`rounded-md p-3 text-sm font-medium ${
+                myRsvp.status === "confirmed" ? "bg-green-100 text-green-800" :
+                myRsvp.status === "maybe" ? "bg-yellow-100 text-yellow-800" :
+                "bg-red-100 text-red-800"
+              }`}>
+                Your RSVP: <span className="font-semibold">{rsvpStatusLabel[myRsvp.status]}</span>
+                {myRsvp.is_waitlist && (
+                  <span className="ml-1">(Waitlist #{myRsvp.waitlist_position})</span>
+                )}
+              </div>
+            )}
+            <div className="flex gap-2">
+              <Button
+                size="sm"
+                onClick={() => handleRsvp("confirmed")}
+                disabled={rsvpLoading || myRsvp?.status === "confirmed"}
+                className="flex-1 bg-green-700 hover:bg-green-800"
+              >
+                I&apos;m In
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => handleRsvp("maybe")}
+                disabled={rsvpLoading || myRsvp?.status === "maybe"}
+                className="flex-1"
+              >
+                Maybe
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => handleRsvp("absent")}
+                disabled={rsvpLoading || myRsvp?.status === "absent"}
+                className="flex-1"
+              >
+                Can&apos;t Make It
+              </Button>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Withdraw from session */}
       {session.status === "upcoming" && player && rsvps.some((r) => r.player_id === player.id) && (
         <Button
           variant="destructive"
           size="sm"
           className="w-full"
-          onClick={handleWithdraw}
+          onClick={() => setShowWithdrawConfirm(true)}
           disabled={withdrawing}
         >
           <LogOut className="mr-1 h-4 w-4" />
           {withdrawing ? "Withdrawing..." : "Withdraw from Session"}
         </Button>
       )}
+
+      {/* Withdraw Confirmation */}
+      <Dialog open={showWithdrawConfirm} onOpenChange={setShowWithdrawConfirm}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Withdraw from Session</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to withdraw from this session?
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setShowWithdrawConfirm(false)}>Cancel</Button>
+            <Button variant="destructive" onClick={() => {
+              setShowWithdrawConfirm(false);
+              handleWithdraw();
+            }} disabled={withdrawing}>
+              {withdrawing ? "Withdrawing..." : "Withdraw"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Teams — shown when teams exist */}
       {teams.length > 0 && (

@@ -2,7 +2,7 @@ export type PlayerType = "regular" | "casual";
 export type RsvpStatus = "confirmed" | "absent" | "maybe";
 export type SessionStatus = "upcoming" | "signups_closed" | "teams_published" | "completed" | "cancelled";
 export type PaymentStatus = "unpaid" | "paid";
-export type NotificationChannel = "sms" | "push" | "email";
+export type NotificationChannel = "sms" | "push" | "email" | "whatsapp";
 export type SessionFormat = "2t" | "3t";
 
 export interface Player {

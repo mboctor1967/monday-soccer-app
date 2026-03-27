@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { Star, CheckCircle, XCircle, HelpCircle } from "lucide-react";
+import { Star, CheckCircle, XCircle, HelpCircle, Pencil } from "lucide-react";
 import { toast } from "sonner";
 import type { Rsvp, Payment, Session } from "@/lib/types/database";
 
@@ -20,13 +20,14 @@ interface HistoryEntry {
 }
 
 export default function ProfilePage() {
-  const { player, isAdmin } = useAuth();
+  const { player, isAdmin, refreshPlayer } = useAuth();
   const supabase = createClient();
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
 
   useEffect(() => {
     if (player) {
@@ -76,6 +77,8 @@ export default function ProfilePage() {
       toast.error("Failed to update profile");
     } else {
       toast.success("Profile updated");
+      await refreshPlayer();
+      setIsEditing(false);
     }
     setIsSaving(false);
   }
@@ -114,36 +117,72 @@ export default function ProfilePage() {
               <p className="font-semibold">{player.name}</p>
               <p className="text-sm text-muted-foreground">{player.mobile}</p>
             </div>
-            <div className="text-right">
-              <Badge>{player.player_type}</Badge>
-              {isAdmin && (
-                <div className="mt-1 flex items-center gap-0.5">
-                  {Array.from({ length: 5 }).map((_, i) => (
-                    <Star
-                      key={i}
-                      className={`h-4 w-4 ${i < player.skill_rating ? "fill-yellow-400 text-yellow-400" : "text-gray-300"}`}
-                    />
-                  ))}
-                </div>
+            <div className="flex items-center gap-2">
+              <div className="text-right">
+                <Badge>{player.player_type}</Badge>
+                {isAdmin && (
+                  <div className="mt-1 flex items-center gap-0.5">
+                    {Array.from({ length: 5 }).map((_, i) => (
+                      <Star
+                        key={i}
+                        className={`h-4 w-4 ${i < player.skill_rating ? "fill-yellow-400 text-yellow-400" : "text-gray-300"}`}
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
+              {!isEditing && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => setIsEditing(true)}
+                  className="h-8 w-8"
+                >
+                  <Pencil className="h-4 w-4" />
+                </Button>
               )}
             </div>
           </div>
 
-          <Separator />
-
-          <div className="space-y-3">
-            <div className="space-y-1">
-              <Label htmlFor="name">Name</Label>
-              <Input id="name" value={name} onChange={(e) => setName(e.target.value)} />
-            </div>
-            <div className="space-y-1">
-              <Label htmlFor="email">Email (optional)</Label>
-              <Input id="email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
-            </div>
-            <Button onClick={handleSave} disabled={isSaving} size="sm" className="bg-green-700 hover:bg-green-800">
-              {isSaving ? "Saving..." : "Save Changes"}
-            </Button>
-          </div>
+          {isEditing ? (
+            <>
+              <Separator />
+              <div className="space-y-3">
+                <div className="space-y-1">
+                  <Label htmlFor="name">Name</Label>
+                  <Input id="name" value={name} onChange={(e) => setName(e.target.value)} />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="email">Email (optional)</Label>
+                  <Input id="email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
+                </div>
+                <div className="flex gap-2">
+                  <Button onClick={handleSave} disabled={isSaving} size="sm" className="bg-green-700 hover:bg-green-800">
+                    {isSaving ? "Saving..." : "Save"}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={isSaving}
+                    onClick={() => {
+                      setName(player.name);
+                      setEmail(player.email || "");
+                      setIsEditing(false);
+                    }}
+                  >
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            </>
+          ) : (
+            player.email && (
+              <>
+                <Separator />
+                <div className="text-sm text-muted-foreground">{player.email}</div>
+              </>
+            )
+          )}
         </CardContent>
       </Card>
 

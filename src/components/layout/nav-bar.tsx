@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useAuth } from "@/lib/context/auth-context";
-import { Home, Calendar, Users, Settings, LogOut, Shield } from "lucide-react";
+import { Home, Calendar, MessageSquare, Users, Settings, LogOut, Shield } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const playerNav = [
@@ -15,6 +15,7 @@ const playerNav = [
 const adminNav = [
   { href: "/admin", label: "Dashboard", icon: Shield },
   { href: "/admin/sessions", label: "Sessions", icon: Calendar },
+  { href: "/admin/messages", label: "Messages", icon: MessageSquare },
   { href: "/admin/players", label: "Players", icon: Users },
   { href: "/admin/settings", label: "Settings", icon: Settings },
 ];
