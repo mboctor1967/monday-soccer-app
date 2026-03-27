@@ -96,13 +96,15 @@ export default function AdminSessionsPage() {
     toast.success("Session deleted");
   }
 
-  const statusColor: Record<string, string> = {
-    upcoming: "bg-blue-100 text-blue-800",
-    signups_closed: "bg-yellow-100 text-yellow-800",
-    teams_published: "bg-green-100 text-green-800",
-    completed: "bg-gray-100 text-gray-800",
-    cancelled: "bg-red-100 text-red-800",
-  };
+  function getWorkflowStep(s: SessionWithStats) {
+    if (s.status === "cancelled") return { label: "Cancelled", color: "bg-red-100 text-red-800" };
+    if (s.status === "completed") return { label: "Completed", color: "bg-gray-100 text-gray-800" };
+    if (s.status === "teams_published" && s.payment_total > 0) return { label: "Payments", color: "bg-purple-100 text-purple-800" };
+    if (s.status === "teams_published") return { label: "Teams", color: "bg-green-100 text-green-800" };
+    if (s.status === "signups_closed") return { label: "Closed", color: "bg-yellow-100 text-yellow-800" };
+    if (s.confirmed_count > 0) return { label: "Sign-ups", color: "bg-blue-100 text-blue-800" };
+    return { label: "Created", color: "bg-blue-50 text-blue-600" };
+  }
 
   if (isLoading) {
     return <div className="flex items-center justify-center py-12"><div className="h-8 w-8 animate-spin rounded-full border-4 border-green-700 border-t-transparent" /></div>;
@@ -120,6 +122,7 @@ export default function AdminSessionsPage() {
         const maxPlayers = session.format === "3t" ? 15 : 10;
         const pctPaid = session.payment_total > 0 ? (session.paid_count / session.payment_total) * 100 : 0;
         const barColor = pctPaid === 100 ? "bg-green-500" : pctPaid >= 50 ? "bg-yellow-500" : "bg-red-500";
+        const step = getWorkflowStep(session);
         return (
           <Card
             key={session.id}
@@ -135,7 +138,7 @@ export default function AdminSessionsPage() {
                   </span>
                 </div>
                 <div className="flex items-center gap-1">
-                  <Badge className={statusColor[session.status]}>{session.status.replace(/_/g, " ")}</Badge>
+                  <Badge className={step.color}>{step.label}</Badge>
                   <button
                     className="p-1 rounded hover:bg-red-100 text-muted-foreground hover:text-red-600 transition-colors"
                     onClick={(e) => { e.stopPropagation(); setDeleteTarget(session); }}
@@ -185,6 +188,7 @@ export default function AdminSessionsPage() {
           <h3 className="text-sm font-medium text-muted-foreground pt-2">Past Sessions</h3>
           {sessions.filter((s) => ["completed", "cancelled"].includes(s.status)).map((session) => {
             const maxPlayers = session.format === "3t" ? 15 : 10;
+            const step = getWorkflowStep(session);
             return (
               <Card
                 key={session.id}
@@ -200,7 +204,7 @@ export default function AdminSessionsPage() {
                       </span>
                     </div>
                     <div className="flex items-center gap-1">
-                      <Badge className={statusColor[session.status]}>{session.status.replace(/_/g, " ")}</Badge>
+                      <Badge className={step.color}>{step.label}</Badge>
                       <button
                         className="p-1 rounded hover:bg-red-100 text-muted-foreground hover:text-red-600 transition-colors"
                         onClick={(e) => { e.stopPropagation(); setDeleteTarget(session); }}

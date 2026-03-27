@@ -66,13 +66,15 @@ export default function SessionsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const statusColor: Record<string, string> = {
-    upcoming: "bg-blue-100 text-blue-800",
-    signups_closed: "bg-yellow-100 text-yellow-800",
-    teams_published: "bg-green-100 text-green-800",
-    completed: "bg-gray-100 text-gray-800",
-    cancelled: "bg-red-100 text-red-800",
-  };
+  function getWorkflowStep(s: SessionWithStats) {
+    if (s.status === "cancelled") return { label: "Cancelled", color: "bg-red-100 text-red-800" };
+    if (s.status === "completed") return { label: "Completed", color: "bg-gray-100 text-gray-800" };
+    if (s.status === "teams_published" && s.payment_total > 0) return { label: "Payments", color: "bg-purple-100 text-purple-800" };
+    if (s.status === "teams_published") return { label: "Teams", color: "bg-green-100 text-green-800" };
+    if (s.status === "signups_closed") return { label: "Closed", color: "bg-yellow-100 text-yellow-800" };
+    if (s.confirmed_count > 0) return { label: "Sign-ups", color: "bg-blue-100 text-blue-800" };
+    return { label: "Created", color: "bg-blue-50 text-blue-600" };
+  }
 
   if (isLoading) {
     return (
@@ -94,6 +96,7 @@ export default function SessionsPage() {
       ) : (<>
         {sessions.filter((s) => ["upcoming", "signups_closed", "teams_published"].includes(s.status)).map((session) => {
           const maxPlayers = session.format === "3t" ? 15 : 10;
+          const step = getWorkflowStep(session);
           return (
             <Card
               key={session.id}
@@ -112,8 +115,8 @@ export default function SessionsPage() {
                       })}
                     </span>
                   </div>
-                  <Badge className={statusColor[session.status]}>
-                    {session.status.replace(/_/g, " ")}
+                  <Badge className={step.color}>
+                    {step.label}
                   </Badge>
                 </div>
                 <div className="space-y-1 text-xs text-muted-foreground">
@@ -148,6 +151,7 @@ export default function SessionsPage() {
             <h3 className="text-sm font-medium text-muted-foreground pt-2">Past Sessions</h3>
             {sessions.filter((s) => ["completed", "cancelled"].includes(s.status)).map((session) => {
               const maxPlayers = session.format === "3t" ? 15 : 10;
+              const step = getWorkflowStep(session);
               return (
                 <Card
                   key={session.id}
@@ -166,8 +170,8 @@ export default function SessionsPage() {
                           })}
                         </span>
                       </div>
-                      <Badge className={statusColor[session.status]}>
-                        {session.status.replace(/_/g, " ")}
+                      <Badge className={step.color}>
+                        {step.label}
                       </Badge>
                     </div>
                     <div className="space-y-1 text-xs text-muted-foreground">
