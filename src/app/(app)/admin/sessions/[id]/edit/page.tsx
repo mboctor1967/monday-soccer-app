@@ -25,6 +25,9 @@ export default function EditSessionPage() {
   });
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [sessionStatus, setSessionStatus] = useState("");
+  const [originalCost, setOriginalCost] = useState(0);
+  const [originalBuffer, setOriginalBuffer] = useState(0);
 
   useEffect(() => {
     async function fetch() {
@@ -39,6 +42,9 @@ export default function EditSessionPage() {
           court_cost: data.court_cost.toString(),
           buffer_pct: data.buffer_pct.toString(),
         });
+        setSessionStatus(data.status);
+        setOriginalCost(data.court_cost);
+        setOriginalBuffer(data.buffer_pct);
       }
       setIsLoading(false);
     }
@@ -48,22 +54,47 @@ export default function EditSessionPage() {
 
   async function handleSubmit() {
     setIsSubmitting(true);
+    const newCost = parseFloat(form.court_cost);
+    const newBuffer = parseFloat(form.buffer_pct);
+
     const { error } = await supabase.from("sessions").update({
       date: form.date,
       venue: form.venue,
       start_time: form.start_time,
       end_time: form.end_time,
       format: form.format as "2t" | "3t",
-      court_cost: parseFloat(form.court_cost),
-      buffer_pct: parseFloat(form.buffer_pct),
+      court_cost: newCost,
+      buffer_pct: newBuffer,
     }).eq("id", id);
 
     if (error) {
       toast.error("Failed to update session");
-    } else {
-      toast.success("Session updated");
-      router.push(`/admin/sessions/${id}`);
+      setIsSubmitting(false);
+      return;
     }
+
+    // Recalculate unpaid payments if cost or buffer changed
+    if (newCost !== originalCost || newBuffer !== originalBuffer) {
+      const { data: existingPayments } = await supabase
+        .from("payments")
+        .select("id, payment_status")
+        .eq("session_id", id)
+        .neq("payment_status", "paid");
+
+      if (existingPayments && existingPayments.length > 0) {
+        const max = form.format === "3t" ? 15 : 10;
+        const newCostPerPlayer = newCost * (1 + newBuffer / 100) / max;
+        for (const p of existingPayments) {
+          await supabase.from("payments")
+            .update({ amount_due: newCostPerPlayer })
+            .eq("id", p.id);
+        }
+        toast.success(`${existingPayments.length} unpaid payment(s) recalculated to $${newCostPerPlayer.toFixed(2)} each`);
+      }
+    }
+
+    toast.success("Session updated");
+    router.push(`/admin/sessions/${id}`);
     setIsSubmitting(false);
   }
 
@@ -81,8 +112,8 @@ export default function EditSessionPage() {
             <div className="space-y-1"><Label>End</Label><Input type="time" value={form.end_time} onChange={(e) => setForm({ ...form, end_time: e.target.value })} /></div>
           </div>
           <div className="space-y-1">
-            <Label>Format</Label>
-            <Select value={form.format} onValueChange={(v) => v && setForm({ ...form, format: v })}>
+            <Label>Format {sessionStatus === "teams_published" && <span className="text-xs text-muted-foreground">(locked — teams published)</span>}</Label>
+            <Select value={form.format} onValueChange={(v) => v && setForm({ ...form, format: v })} disabled={sessionStatus === "teams_published"}>
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="2t">2 Teams (10)</SelectItem>

@@ -9,7 +9,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Separator } from "@/components/ui/separator";
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter,
   DialogHeader, DialogTitle
@@ -31,7 +30,6 @@ export default function SessionDetailPage() {
   const [session, setSession] = useState<Session | null>(null);
   const [rsvps, setRsvps] = useState<(Rsvp & { player: Player })[]>([]);
   const [teams, setTeams] = useState<TeamWithPlayers[]>([]);
-  const [myPayment, setMyPayment] = useState<Payment | null>(null);
   const [allPayments, setAllPayments] = useState<(Payment & { player?: { name: string } })[]>([]);
   const [paymentSummary, setPaymentSummary] = useState({ paid: 0, total: 0 });
   const [isLoading, setIsLoading] = useState(true);
@@ -194,11 +192,34 @@ export default function SessionDetailPage() {
 
   useEffect(() => {
     const paymentStatus = searchParams.get("payment");
-    if (paymentStatus === "success") {
+    const checkoutSessionId = searchParams.get("checkout_session_id");
+    if (paymentStatus === "success" && checkoutSessionId) {
+      // Verify and mark payments as paid via Stripe confirmation
+      fetch("/api/payments/verify-checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: checkoutSessionId }),
+      })
+        .then((r) => r.json())
+        .then((data) => {
+          if (data.status === "paid") {
+            toast.success(`Payment successful! ${data.count} payment(s) confirmed.`);
+          } else if (data.status === "already_paid") {
+            toast.success("Payment already confirmed.");
+          } else {
+            toast.success("Payment successful! Thank you.");
+          }
+          fetchAll();
+        })
+        .catch(() => {
+          toast.success("Payment successful! Thank you.");
+        });
+    } else if (paymentStatus === "success") {
       toast.success("Payment successful! Thank you.");
     } else if (paymentStatus === "cancelled") {
       toast.info("Payment was cancelled.");
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
 
   function togglePaymentSelection(paymentId: string) {
@@ -276,7 +297,7 @@ export default function SessionDetailPage() {
       return;
     }
 
-    const [sessionRes, rsvpRes, teamsRes, paymentRes, paymentSummaryRes] = await Promise.all([
+    const [sessionRes, rsvpRes, teamsRes, , paymentSummaryRes] = await Promise.all([
       supabase.from("sessions").select("*").eq("id", id).single(),
       supabase.from("rsvps").select("*, player:players(*)").eq("session_id", id).order("rsvp_at"),
       supabase.from("teams").select("*").eq("session_id", id).order("team_name"),
@@ -319,9 +340,6 @@ export default function SessionDetailPage() {
     const { data: activePlayers } = await supabase.from("players").select("*").eq("is_active", true).order("name");
     setAllActivePlayers((activePlayers || []) as Player[]);
 
-    const myPay = paymentRes.data as Payment | null;
-    setMyPayment(myPay);
-
     if (paymentSummaryRes.data) {
       const paymentsWithPlayer = paymentSummaryRes.data.map((p: Record<string, unknown>) => ({
         ...p,
@@ -332,9 +350,10 @@ export default function SessionDetailPage() {
       setPaymentSummary({ paid, total: paymentsWithPlayer.length });
 
       // Auto-select own unpaid payment
-      if (myPay && myPay.payment_status !== "paid" && !myPay.pending_confirmation) {
+      const ownPayment = paymentsWithPlayer.find((p) => p.player_id === player.id);
+      if (ownPayment && ownPayment.payment_status !== "paid" && !ownPayment.pending_confirmation) {
         setSelectedPaymentIds((prev) => {
-          if (prev.size === 0) return new Set([myPay.id]);
+          if (prev.size === 0) return new Set([ownPayment.id]);
           return prev;
         });
       }

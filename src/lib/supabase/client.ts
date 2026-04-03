@@ -9,9 +9,9 @@ export function createClient() {
   const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "placeholder-key";
   client = createBrowserClient<Database>(url, key, {
     auth: {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      lock: (async (_name: string, _acquireTimeout: number, fn: () => any) => {
+      lock: (async (_name: string, _acquireTimeout: number, fn: () => unknown) => {
         return fn();
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
       }) as any,
     },
   });

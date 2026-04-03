@@ -58,7 +58,7 @@ export async function POST(request: Request) {
         payment_ids: unpaid.map((p) => p.id).join(","),
         session_id: unpaid[0].session_id,
       },
-      success_url: `${process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"}/sessions/${unpaid[0].session_id}?payment=success`,
+      success_url: `${process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"}/sessions/${unpaid[0].session_id}?payment=success&checkout_session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"}/sessions/${unpaid[0].session_id}?payment=cancelled`,
     });
 

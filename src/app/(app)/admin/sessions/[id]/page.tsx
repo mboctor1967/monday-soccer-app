@@ -15,12 +15,12 @@ import {
 import { toast } from "sonner";
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter,
-  DialogHeader, DialogTitle, DialogTrigger
+  DialogHeader, DialogTitle
 } from "@/components/ui/dialog";
 import {
-  Calendar, Clock, MapPin, Users, DollarSign, Lock, UserPlus,
+  Calendar, Clock, MapPin, Users, DollarSign, Lock, Unlock, UserPlus,
   Shuffle, Send, XCircle, Star, Edit, Trash2, Copy, MessageSquare,
-  MessageCircle, Search, CreditCard, Phone, Check, X, PauseCircle
+  MessageCircle, Search, CreditCard, Phone, Check, X, PauseCircle, Undo2
 } from "lucide-react";
 import { generateBalancedTeams, getBalanceScoreFromProposals, type TeamProposal } from "@/lib/team-balancer";
 import type { Session, Rsvp, Player, Payment, Team } from "@/lib/types/database";
@@ -58,6 +58,12 @@ export default function AdminSessionDetailPage() {
   const [playerSearch, setPlayerSearch] = useState("");
   const [lastNotification, setLastNotification] = useState<{ message: string; sent_at: string; count: number } | null>(null);
   const [removeConfirm, setRemoveConfirm] = useState<{rsvpId: string; name: string} | null>(null);
+  const [showRemoveMaybesDialog, setShowRemoveMaybesDialog] = useState(false);
+  const [showReopenSignupsDialog, setShowReopenSignupsDialog] = useState(false);
+  const [showUnpublishTeamsDialog, setShowUnpublishTeamsDialog] = useState(false);
+  const [showReopenSessionDialog, setShowReopenSessionDialog] = useState(false);
+  const [showUncancelDialog, setShowUncancelDialog] = useState(false);
+  const [latePlayerTeamId, setLatePlayerTeamId] = useState<string>("");
   const [selectedPaymentIds, setSelectedPaymentIds] = useState<Set<string>>(new Set());
   const [paymentProcessing, setPaymentProcessing] = useState(false);
   const [showPayIdDialog, setShowPayIdDialog] = useState(false);
@@ -145,12 +151,34 @@ export default function AdminSessionDetailPage() {
   }
 
   async function handleCloseSignups() {
+    if (!session) return;
     setActionLoading("close");
     await supabase
       .from("sessions")
       .update({ status: "signups_closed", closed_at: new Date().toISOString() })
       .eq("id", id);
-    toast.success("Sign-ups closed");
+
+    // Auto-create payment records for all confirmed players
+    const confirmedPlayers = rsvps.filter((r) => r.status === "confirmed" && !r.is_waitlist);
+    const max = session.format === "3t" ? 15 : 10;
+    const cost = session.court_cost * (1 + session.buffer_pct / 100) / max;
+    const existingPlayerIds = payments.map((p) => p.player_id);
+    const newPayments = confirmedPlayers
+      .filter((r) => !existingPlayerIds.includes(r.player_id))
+      .map((r) => ({
+        session_id: session.id,
+        player_id: r.player_id,
+        amount_due: cost,
+        amount_paid: r.player_id === session.court_payer_id ? cost : 0,
+        payment_status: (r.player_id === session.court_payer_id ? "paid" : "unpaid") as "paid" | "unpaid",
+        payment_method: null,
+        notes: null,
+      }));
+    if (newPayments.length > 0) {
+      await supabase.from("payments").insert(newPayments);
+    }
+
+    toast.success(`Sign-ups closed. ${newPayments.length} payment record(s) created.`);
     await fetchAll();
     setActionLoading("");
   }
@@ -170,6 +198,57 @@ export default function AdminSessionDetailPage() {
     await supabase.from("sessions").update({ status: "completed" }).eq("id", id);
     toast.success("Session marked complete");
     setShowCompleteDialog(false);
+    await fetchAll();
+    setActionLoading("");
+  }
+
+  // ── Backward Transitions ──────────────────────────────────────────────
+
+  async function handleReopenSignups() {
+    if (!session) return;
+    setActionLoading("reopenSignups");
+    // Delete unpaid payment records; preserve paid ones
+    await supabase.from("payments").delete()
+      .eq("session_id", session.id)
+      .eq("payment_status", "unpaid");
+    await supabase.from("sessions").update({ status: "upcoming", closed_at: null }).eq("id", id);
+    toast.success("Sign-ups reopened. Unpaid payment records removed.");
+    setShowReopenSignupsDialog(false);
+    await fetchAll();
+    setActionLoading("");
+  }
+
+  async function handleUnpublishTeams() {
+    if (!session) return;
+    setActionLoading("unpublishTeams");
+    // Delete team_players and teams; preserve RSVPs and payments
+    const { data: existingTeams } = await supabase.from("teams").select("id").eq("session_id", id);
+    if (existingTeams && existingTeams.length > 0) {
+      const teamIds = existingTeams.map((t) => t.id);
+      await supabase.from("team_players").delete().in("team_id", teamIds);
+      await supabase.from("teams").delete().eq("session_id", id);
+    }
+    await supabase.from("sessions").update({ status: "signups_closed" }).eq("id", id);
+    toast.success("Teams unpublished. Payments and RSVPs preserved.");
+    setShowUnpublishTeamsDialog(false);
+    await fetchAll();
+    setActionLoading("");
+  }
+
+  async function handleReopenSession() {
+    setActionLoading("reopenSession");
+    await supabase.from("sessions").update({ status: "teams_published" }).eq("id", id);
+    toast.success("Session reopened. You can now manage payments and teams.");
+    setShowReopenSessionDialog(false);
+    await fetchAll();
+    setActionLoading("");
+  }
+
+  async function handleUncancelSession() {
+    setActionLoading("uncancel");
+    await supabase.from("sessions").update({ status: "upcoming" }).eq("id", id);
+    toast.success("Session restored to upcoming. Players can RSVP again.");
+    setShowUncancelDialog(false);
     await fetchAll();
     setActionLoading("");
   }
@@ -216,39 +295,20 @@ export default function AdminSessionDetailPage() {
     setActionLoading("");
   }
 
-  async function handleCreatePayments() {
+  async function handleRemoveAllMaybes() {
     if (!session) return;
-    setActionLoading("payments");
-
-    const confirmed = rsvps.filter((r) => r.status === "confirmed" && !r.is_waitlist);
-    const maxPlayers = session.format === "3t" ? 15 : 10;
-    const costPerPlayer = session.court_cost * (1 + session.buffer_pct / 100) / maxPlayers;
-
-    const existingPlayerIds = payments.map((p) => p.player_id);
-    const newPayments = confirmed
-      .filter((r) => !existingPlayerIds.includes(r.player_id))
-      .map((r) => {
-        const isCourtPayer = r.player_id === session.court_payer_id;
-        return {
-          session_id: session.id,
-          player_id: r.player_id,
-          amount_due: costPerPlayer,
-          amount_paid: isCourtPayer ? costPerPlayer : 0,
-          payment_status: (isCourtPayer ? "paid" : "unpaid") as "paid" | "unpaid",
-          payment_method: null,
-          notes: null,
-        };
-      });
-
-    if (newPayments.length > 0) {
-      await supabase.from("payments").insert(newPayments);
-      toast.success(`Created ${newPayments.length} payment records`);
-    } else {
-      toast.info("All payment records already exist");
-    }
+    setActionLoading("removeMaybes");
+    const maybeRsvps = rsvps.filter((r) => r.status === "maybe");
+    const maybeIds = maybeRsvps.map((r) => r.id);
+    if (maybeIds.length === 0) { setActionLoading(""); return; }
+    await supabase.from("rsvps").delete().in("id", maybeIds);
+    toast.success(`Removed ${maybeIds.length} maybe player(s)`);
     await fetchAll();
     setActionLoading("");
+    setShowRemoveMaybesDialog(false);
   }
+
+
 
   async function handlePaymentUpdate(paymentId: string, status: string) {
     const payment = payments.find((p) => p.id === paymentId);
@@ -344,6 +404,61 @@ export default function AdminSessionDetailPage() {
     setNewPlayerForm({ name: "", mobile: "", email: "" });
     setShowNewPlayerForm(false);
     setActionLoading("");
+    await fetchAll();
+  }
+
+  async function handleChangeRsvpStatus(rsvpId: string, playerId: string, playerName: string, newStatus: string) {
+    if (!session) return;
+    const rsvp = rsvps.find((r) => r.id === rsvpId);
+    if (!rsvp) return;
+    const wasConfirmed = rsvp.status === "confirmed" && !rsvp.is_waitlist;
+
+    // Update the RSVP status
+    await supabase.from("rsvps").update({ status: newStatus, is_waitlist: false }).eq("id", rsvpId);
+
+    // If moving away from confirmed, remove from team if on one
+    if (wasConfirmed && newStatus !== "confirmed") {
+      for (const team of teams) {
+        if (team.players.some((p) => p.id === playerId)) {
+          await supabase.from("team_players").delete().match({ team_id: team.id, player_id: playerId });
+          // Recalculate team avg
+          const remaining = team.players.filter((p) => p.id !== playerId);
+          if (remaining.length > 0) {
+            const avg = remaining.reduce((s, p) => s + (p.skill_rating || 3), 0) / remaining.length;
+            await supabase.from("teams").update({ avg_skill_rating: avg }).eq("id", team.id);
+          }
+          break;
+        }
+      }
+      // Auto-promote from waitlist if spot opened
+      const maxPlayers = session.format === "3t" ? 15 : 10;
+      const currentConfirmed = rsvps.filter((r) => r.id !== rsvpId && r.status === "confirmed" && !r.is_waitlist).length;
+      if (currentConfirmed < maxPlayers) {
+        const nextWaitlist = rsvps
+          .filter((r) => r.is_waitlist && r.status === "confirmed")
+          .sort((a, b) => (a.waitlist_position || 99) - (b.waitlist_position || 99))[0];
+        if (nextWaitlist) {
+          await supabase.from("rsvps").update({ is_waitlist: false, promoted_at: new Date().toISOString() }).eq("id", nextWaitlist.id);
+          toast.info(`Auto-promoted ${nextWaitlist.player?.name} from waitlist`);
+        }
+      }
+    }
+
+    // If changing TO confirmed from absent/maybe
+    if (!wasConfirmed && newStatus === "confirmed") {
+      const maxPlayers = session.format === "3t" ? 15 : 10;
+      const currentConfirmed = rsvps.filter((r) => r.status === "confirmed" && !r.is_waitlist).length;
+      if (currentConfirmed >= maxPlayers) {
+        // Session full — put on waitlist instead
+        const wlPos = rsvps.filter((r) => r.is_waitlist).length + 1;
+        await supabase.from("rsvps").update({ status: "confirmed", is_waitlist: true, waitlist_position: wlPos }).eq("id", rsvpId);
+        toast.info(`${playerName} added to waitlist (session full)`);
+        await fetchAll();
+        return;
+      }
+    }
+
+    toast.success(`${playerName} status changed to ${newStatus}`);
     await fetchAll();
   }
 
@@ -574,7 +689,7 @@ export default function AdminSessionDetailPage() {
 
     await supabase.from("sessions").update({ status: "teams_published" }).eq("id", id);
 
-    // Auto-create payments
+    // Create payments for any players missing them (e.g. late additions)
     const max = session.format === "3t" ? 15 : 10;
     const costPerPlayer = session.court_cost * (1 + session.buffer_pct / 100) / max;
     const allPlayerIds = teamProposals.flatMap((t) => t.players.map((p) => p.id));
@@ -598,7 +713,10 @@ export default function AdminSessionDetailPage() {
       await supabase.from("payments").insert(newPayments);
     }
 
-    toast.success(`Teams published! ${newPayments.length} payment records created.`);
+    const msg = newPayments.length > 0
+      ? `Teams published! ${newPayments.length} new payment record(s) created.`
+      : "Teams published!";
+    toast.success(msg);
     setShowTeamGen(false);
     setIsPublishing(false);
     await fetchAll();
@@ -742,8 +860,6 @@ export default function AdminSessionDetailPage() {
           const isCancelled = session.status === "cancelled";
           const isCompleted = !isCancelled && idx < workflowCurrentStep;
           const isCurrent = !isCancelled && idx === workflowCurrentStep;
-          const isFuture = !isCancelled && idx > workflowCurrentStep;
-
           return (
             <div key={step.label} className="flex items-center flex-1 last:flex-none">
               <div className="flex flex-col items-center">
@@ -856,10 +972,16 @@ export default function AdminSessionDetailPage() {
 
       {/* Action Buttons */}
       <div className="flex flex-wrap gap-2">
+        {/* Edit button — available during upcoming, closed, and teams_published */}
+        {(session.status === "upcoming" || session.status === "signups_closed" || session.status === "teams_published") && (
+          <Button size="sm" variant="outline" onClick={() => router.push(`/admin/sessions/${id}/edit`)}>
+            <Edit className="mr-1 h-4 w-4" /> Edit
+          </Button>
+        )}
         {session.status === "upcoming" && (
           <>
-            <Button size="sm" variant="outline" onClick={() => router.push(`/admin/sessions/${id}/edit`)}>
-              <Edit className="mr-1 h-4 w-4" /> Edit
+            <Button size="sm" onClick={handlePromoteWaitlist} disabled={actionLoading === "promote"} className="bg-blue-600 hover:bg-blue-700">
+              <UserPlus className="mr-1 h-4 w-4" /> Promote Waitlist
             </Button>
             <Button size="sm" onClick={handleCloseSignups} disabled={actionLoading === "close"} className="bg-yellow-600 hover:bg-yellow-700">
               <Lock className="mr-1 h-4 w-4" /> Close Sign-ups
@@ -867,6 +989,11 @@ export default function AdminSessionDetailPage() {
             <Button size="sm" variant="destructive" onClick={handleCancelSession} disabled={actionLoading === "cancel"}>
               <XCircle className="mr-1 h-4 w-4" /> Cancel
             </Button>
+            {maybe.length > 0 && (
+              <Button size="sm" variant="outline" onClick={() => setShowRemoveMaybesDialog(true)} disabled={actionLoading === "removeMaybes"} className="text-orange-700 border-orange-300 hover:bg-orange-50">
+                <X className="mr-1 h-4 w-4" /> Remove Maybes ({maybe.length})
+              </Button>
+            )}
           </>
         )}
         {session.status === "signups_closed" && (
@@ -877,7 +1004,32 @@ export default function AdminSessionDetailPage() {
             <Button size="sm" onClick={handleStartTeamGen} className="bg-green-700 hover:bg-green-800">
               <Shuffle className="mr-1 h-4 w-4" /> Generate Teams
             </Button>
+            <Button size="sm" variant="outline" onClick={() => setShowReopenSignupsDialog(true)} disabled={actionLoading === "reopenSignups"}>
+              <Unlock className="mr-1 h-4 w-4" /> Reopen Sign-ups
+            </Button>
+            {maybe.length > 0 && (
+              <Button size="sm" variant="outline" onClick={() => setShowRemoveMaybesDialog(true)} disabled={actionLoading === "removeMaybes"} className="text-orange-700 border-orange-300 hover:bg-orange-50">
+                <X className="mr-1 h-4 w-4" /> Remove Maybes ({maybe.length})
+              </Button>
+            )}
           </>
+        )}
+        {session.status === "teams_published" && (
+          <>
+            <Button size="sm" variant="outline" onClick={() => setShowUnpublishTeamsDialog(true)} disabled={actionLoading === "unpublishTeams"}>
+              <Undo2 className="mr-1 h-4 w-4" /> Unpublish Teams
+            </Button>
+          </>
+        )}
+        {session.status === "completed" && (
+          <Button size="sm" variant="outline" onClick={() => setShowReopenSessionDialog(true)} disabled={actionLoading === "reopenSession"}>
+            <Undo2 className="mr-1 h-4 w-4" /> Reopen Session
+          </Button>
+        )}
+        {session.status === "cancelled" && (
+          <Button size="sm" variant="outline" onClick={() => setShowUncancelDialog(true)} disabled={actionLoading === "uncancel"}>
+            <Undo2 className="mr-1 h-4 w-4" /> Uncancel
+          </Button>
         )}
       </div>
 
@@ -1195,7 +1347,7 @@ export default function AdminSessionDetailPage() {
             return (
               <div key={r.id} className={`flex items-center justify-between py-1.5 px-2 -mx-2 rounded text-sm border-b last:border-0 ${rowBg}`}>
                 <div className="flex items-center gap-1 min-w-0">
-                  {session.status === "upcoming" && (
+                  {session.status !== "completed" && session.status !== "cancelled" && (
                     <button
                       onClick={() => setRemoveConfirm({rsvpId: r.id, name: r.player?.name || "Player"})}
                       className="text-muted-foreground hover:text-red-600 shrink-0"
@@ -1206,6 +1358,17 @@ export default function AdminSessionDetailPage() {
                   <span className="text-muted-foreground w-6 shrink-0">#{idx + 1}</span>
                   <span className="truncate">{r.player?.name}</span>
                   {isCourtPayer && <Badge variant="outline" className="text-xs shrink-0">Court Payer</Badge>}
+                  {session.status !== "completed" && session.status !== "cancelled" && (
+                    <select
+                      className="text-xs border rounded px-1 py-0.5 bg-white ml-1"
+                      value="confirmed"
+                      onChange={(e) => handleChangeRsvpStatus(r.id, r.player_id, r.player?.name || "Player", e.target.value)}
+                    >
+                      <option value="confirmed">Confirmed</option>
+                      <option value="maybe">Maybe</option>
+                      <option value="absent">Absent</option>
+                    </select>
+                  )}
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
                   {Array.from({ length: r.player?.skill_rating || 0 }).map((_, i) => (
@@ -1244,16 +1407,20 @@ export default function AdminSessionDetailPage() {
       )}
 
       {/* Add Player to Session */}
-      {session.status === "upcoming" && confirmed.length < maxPlayers && (() => {
+      {session.status !== "completed" && session.status !== "cancelled" && (() => {
         const availablePlayers = allPlayers.filter((p) => !rsvps.some((r) => r.player_id === p.id));
 
         async function addPlayerToSession(playerId: string) {
           if (!session) return;
           const alreadyIn = rsvps.some((r) => r.player_id === playerId);
           if (alreadyIn) { toast.info("Player already in session"); return; }
+
+          // During upcoming, respect max cap; after close, bypass it (late addition)
+          const isLateAddition = session.status !== "upcoming";
           const currentConfirmed = rsvps.filter((r) => r.status === "confirmed" && !r.is_waitlist).length;
-          const isFull = currentConfirmed >= maxPlayers;
+          const isFull = !isLateAddition && currentConfirmed >= maxPlayers;
           if (isFull) toast.info("Session is full — adding to waitlist instead");
+
           await supabase.from("rsvps").insert({
             session_id: session.id,
             player_id: playerId,
@@ -1263,7 +1430,47 @@ export default function AdminSessionDetailPage() {
             waitlist_position: isFull ? waitlist.length + 1 : null,
             promoted_at: null,
           });
-          toast.success(isFull ? "Added to waitlist (session full)" : "Player added");
+
+          // Auto-create payment for late additions if payments already exist
+          if (isLateAddition && !isFull) {
+            const max = session.format === "3t" ? 15 : 10;
+            const cost = session.court_cost * (1 + session.buffer_pct / 100) / max;
+            const existingPayment = payments.find((p) => p.player_id === playerId);
+            if (!existingPayment) {
+              await supabase.from("payments").insert({
+                session_id: session.id,
+                player_id: playerId,
+                amount_due: cost,
+                amount_paid: playerId === session.court_payer_id ? cost : 0,
+                payment_status: playerId === session.court_payer_id ? "paid" : "unpaid",
+                payment_method: null,
+                notes: null,
+              });
+            }
+
+            // Assign to selected team if teams are published
+            if (session.status === "teams_published" && latePlayerTeamId) {
+              await supabase.from("team_players").insert({ team_id: latePlayerTeamId, player_id: playerId });
+              // Recalculate team avg skill
+              const team = teams.find((t) => t.id === latePlayerTeamId);
+              if (team) {
+                const playerData = allPlayers.find((p) => p.id === playerId);
+                const newSkill = playerData?.skill_rating || 3;
+                const newAvg = (team.players.reduce((s, p) => s + (p.skill_rating || 3), 0) + newSkill) / (team.players.length + 1);
+                await supabase.from("teams").update({ avg_skill_rating: newAvg }).eq("id", latePlayerTeamId);
+              }
+            }
+          }
+
+          const teamName = latePlayerTeamId ? teams.find((t) => t.id === latePlayerTeamId)?.team_name : null;
+          const successMsg = isFull
+            ? "Added to waitlist (session full)"
+            : isLateAddition && teamName
+            ? `Late player added to Team ${teamName} with payment record`
+            : isLateAddition
+            ? "Late player added with payment record"
+            : "Player added";
+          toast.success(successMsg);
           setAddPlayerSearch("");
           fetchAll();
         }
@@ -1276,11 +1483,43 @@ export default function AdminSessionDetailPage() {
               <CardTitle className="text-base">Add Player ({confirmed.length}/{maxPlayers})</CardTitle>
             </CardHeader>
             <CardContent className="p-4 pt-0 space-y-2">
+              {/* Team picker — shown when teams are published */}
+              {session.status === "teams_published" && teams.length > 0 && (
+                <div className="space-y-1">
+                  <Label className="text-xs">Assign to Team</Label>
+                  <Select value={latePlayerTeamId} onValueChange={setLatePlayerTeamId}>
+                    <SelectTrigger className="text-sm">
+                      <SelectValue placeholder="Select team..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {teams.map((t) => (
+                        <SelectItem key={t.id} value={t.id}>
+                          Team {t.team_name} ({t.bib_color}) — {t.players.length} players
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+              {/* Dropdown selector */}
+              <Select onValueChange={(val) => addPlayerToSession(val)}>
+                <SelectTrigger className="text-sm">
+                  <SelectValue placeholder="Select a player..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {availablePlayers.sort((a, b) => a.name.localeCompare(b.name)).map((p) => (
+                    <SelectItem key={p.id} value={p.id}>
+                      {p.name} <span className="text-muted-foreground">({p.player_type})</span>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {/* Type-ahead search */}
               <div className="relative">
                 <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
                 <input
                   type="text"
-                  placeholder="Search player name..."
+                  placeholder="Or search by name..."
                   className="w-full pl-8 pr-3 py-2 text-sm rounded-md border bg-background focus:outline-none focus:ring-2 focus:ring-ring"
                   value={addPlayerSearch}
                   onChange={(e) => { setAddPlayerSearch(e.target.value); setAddPlayerHighlight(-1); }}
@@ -1322,13 +1561,43 @@ export default function AdminSessionDetailPage() {
             {maybe.length > 0 && (
               <div className="mb-2">
                 <p className="text-sm font-medium mb-1">Maybe ({maybe.length})</p>
-                {maybe.map((r) => <p key={r.id} className="text-sm text-muted-foreground">{r.player?.name}</p>)}
+                {maybe.map((r) => (
+                  <div key={r.id} className="flex items-center justify-between text-sm text-muted-foreground py-0.5">
+                    <span>{r.player?.name}</span>
+                    {session.status !== "completed" && session.status !== "cancelled" && (
+                      <select
+                        className="text-xs border rounded px-1 py-0.5 bg-white"
+                        value="maybe"
+                        onChange={(e) => handleChangeRsvpStatus(r.id, r.player_id, r.player?.name || "Player", e.target.value)}
+                      >
+                        <option value="confirmed">Confirmed</option>
+                        <option value="maybe">Maybe</option>
+                        <option value="absent">Absent</option>
+                      </select>
+                    )}
+                  </div>
+                ))}
               </div>
             )}
             {absent.length > 0 && (
               <div>
                 <p className="text-sm font-medium mb-1">Can&apos;t Make It ({absent.length})</p>
-                {absent.map((r) => <p key={r.id} className="text-sm text-muted-foreground">{r.player?.name}</p>)}
+                {absent.map((r) => (
+                  <div key={r.id} className="flex items-center justify-between text-sm text-muted-foreground py-0.5">
+                    <span>{r.player?.name}</span>
+                    {session.status !== "completed" && session.status !== "cancelled" && (
+                      <select
+                        className="text-xs border rounded px-1 py-0.5 bg-white"
+                        value="absent"
+                        onChange={(e) => handleChangeRsvpStatus(r.id, r.player_id, r.player?.name || "Player", e.target.value)}
+                      >
+                        <option value="confirmed">Confirmed</option>
+                        <option value="maybe">Maybe</option>
+                        <option value="absent">Absent</option>
+                      </select>
+                    )}
+                  </div>
+                ))}
               </div>
             )}
           </CardContent>
@@ -1409,12 +1678,30 @@ export default function AdminSessionDetailPage() {
                 fetchAll();
               }
 
+              const availableWl = allPlayers
+                .filter((p) => !rsvps.some((r) => r.player_id === p.id))
+                .sort((a, b) => a.name.localeCompare(b.name));
+
               return (<>
+                {/* Dropdown selector */}
+                <Select onValueChange={(val) => addToWaitlist(val)}>
+                  <SelectTrigger className="text-sm">
+                    <SelectValue placeholder="Select a player..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {availableWl.map((p) => (
+                      <SelectItem key={p.id} value={p.id}>
+                        {p.name} <span className="text-muted-foreground">({p.player_type})</span>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {/* Type-ahead search */}
                 <div className="relative">
                   <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
                   <input
                     type="text"
-                    placeholder="Search player name..."
+                    placeholder="Or search by name..."
                     className="w-full pl-8 pr-3 py-2 text-sm rounded-md border bg-background focus:outline-none focus:ring-2 focus:ring-ring"
                     value={waitlistSearch}
                     onChange={(e) => { setWaitlistSearch(e.target.value); setWaitlistHighlight(-1); }}
@@ -1933,6 +2220,96 @@ export default function AdminSessionDetailPage() {
               className="bg-green-700 hover:bg-green-800"
             >
               {paymentProcessing ? "Confirming..." : "I've Paid"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Reopen Sign-ups Confirmation */}
+      <Dialog open={showReopenSignupsDialog} onOpenChange={setShowReopenSignupsDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Reopen Sign-ups</DialogTitle>
+            <DialogDescription>
+              This will reopen sign-ups so players can RSVP again. All unpaid payment records will be deleted. Paid payments will be preserved.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setShowReopenSignupsDialog(false)}>Cancel</Button>
+            <Button onClick={handleReopenSignups} disabled={actionLoading === "reopenSignups"} className="bg-blue-600 hover:bg-blue-700">
+              {actionLoading === "reopenSignups" ? "Reopening..." : "Reopen Sign-ups"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Unpublish Teams Confirmation */}
+      <Dialog open={showUnpublishTeamsDialog} onOpenChange={setShowUnpublishTeamsDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Unpublish Teams</DialogTitle>
+            <DialogDescription>
+              This will remove all team assignments. RSVPs and payment records will be preserved. You can regenerate teams afterwards.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setShowUnpublishTeamsDialog(false)}>Cancel</Button>
+            <Button onClick={handleUnpublishTeams} disabled={actionLoading === "unpublishTeams"} className="bg-yellow-600 hover:bg-yellow-700">
+              {actionLoading === "unpublishTeams" ? "Unpublishing..." : "Unpublish Teams"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Reopen Session Confirmation */}
+      <Dialog open={showReopenSessionDialog} onOpenChange={setShowReopenSessionDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Reopen Session</DialogTitle>
+            <DialogDescription>
+              This will move the session back to &quot;Teams Published&quot; so you can manage payments and teams again.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setShowReopenSessionDialog(false)}>Cancel</Button>
+            <Button onClick={handleReopenSession} disabled={actionLoading === "reopenSession"} className="bg-blue-600 hover:bg-blue-700">
+              {actionLoading === "reopenSession" ? "Reopening..." : "Reopen Session"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Uncancel Confirmation */}
+      <Dialog open={showUncancelDialog} onOpenChange={setShowUncancelDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Restore Session</DialogTitle>
+            <DialogDescription>
+              This will restore the session to &quot;Upcoming&quot; status. Existing RSVPs will be preserved and players can sign up again.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setShowUncancelDialog(false)}>Cancel</Button>
+            <Button onClick={handleUncancelSession} disabled={actionLoading === "uncancel"} className="bg-green-700 hover:bg-green-800">
+              {actionLoading === "uncancel" ? "Restoring..." : "Restore Session"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Remove All Maybes Confirmation */}
+      <Dialog open={showRemoveMaybesDialog} onOpenChange={setShowRemoveMaybesDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Remove All Maybes</DialogTitle>
+            <DialogDescription>
+              Remove {maybe.length} player{maybe.length !== 1 ? "s" : ""} with &quot;maybe&quot; status from this session?
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setShowRemoveMaybesDialog(false)}>Cancel</Button>
+            <Button variant="destructive" onClick={handleRemoveAllMaybes} disabled={actionLoading === "removeMaybes"}>
+              {actionLoading === "removeMaybes" ? "Removing..." : "Remove All"}
             </Button>
           </DialogFooter>
         </DialogContent>
