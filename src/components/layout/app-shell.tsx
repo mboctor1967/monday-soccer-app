@@ -19,7 +19,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     <div className="min-h-screen pb-20">
       <header className="sticky top-0 z-40 border-b bg-green-700 text-white">
         <div className="mx-auto flex max-w-lg items-center justify-between px-4 py-3">
-          <h1 className="text-lg font-bold">Monday Night Soccer</h1>
+          <h1 className="text-lg font-bold">Monday Night Soccer <span className="text-xs font-normal text-green-200">v1.0</span></h1>
           {player && (
             <div className="flex items-center gap-1.5 text-sm">
               {isAdmin && <Shield className="h-3.5 w-3.5 text-yellow-300" />}
