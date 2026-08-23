@@ -46,3 +46,15 @@ next-env.d.ts
 .claude/settings.local.json
 
 .vercel
+
+# added by backup script
+node_modules/
+.next/
+dist/
+.turbo/
+.cache/
+.env
+.env.*
+!.env.example
+*.log
+Thumbs.db
