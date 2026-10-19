@@ -358,6 +358,6 @@ add_test_table(
 doc.add_paragraph('Use any future expiry date (e.g. 12/34), any 3-digit CVC, and any postcode.')
 
 # ── Save ────────────────────────────────────────────────────────────────────
-output_path = r'C:\Users\MagedBoctor\Claude\Soccer App\docs\Monday_Night_Soccer_Test_Cases.docx'
+output_path = r'G:\My Drive\Projects\Private\monday-soccer-app\docs\Monday_Night_Soccer_Test_Cases.docx'  # content lives on Drive
 doc.save(output_path)
 print(f'Document saved to: {output_path}')

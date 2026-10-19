@@ -676,6 +676,6 @@ add_table(
 )
 
 # ── Save ────────────────────────────────────────────────────────────────────
-output_path = r'C:\Users\MagedBoctor\Claude\Soccer App\docs\Monday_Night_Soccer_Requirements.docx'
+output_path = r'G:\My Drive\Projects\Private\monday-soccer-app\docs\Monday_Night_Soccer_Requirements.docx'  # content lives on Drive
 doc.save(output_path)
 print(f'Document saved to: {output_path}')
