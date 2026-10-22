@@ -1,6 +1,10 @@
 # Backlog · Monday Soccer App
-<!-- std-backlog v1 · read by master-project; ids never reused -->
+<!-- std-backlog v2 · read by master-project; ids never reused -->
 
+
+- Status: Paused, not archived (Maged, 19 Oct). Handover note 5 Oct.
+- Next step: Commit the handover note; confirm still in use.
+- As of: 19 Oct 2026
 ## Build backlog
 
 ### B-001 · Session management app with admin controls
