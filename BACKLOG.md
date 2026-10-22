@@ -1,10 +1,10 @@
 # Backlog · Monday Soccer App
 <!-- std-backlog v2 · read by master-project; ids never reused -->
 
-
 - Status: Paused, not archived (Maged, 19 Oct). Handover note 5 Oct.
 - Next step: Commit the handover note; confirm still in use.
 - As of: 19 Oct 2026
+
 ## Build backlog
 
 ### B-001 · Session management app with admin controls
@@ -39,4 +39,19 @@ Backfilled (D18): delivered 2026-03 before the backlog existed. Payments and wor
 
 Backfilled (D18): delivered 2026-04 before the backlog existed. Backward transitions, tests, version label
 
+### B-005 · Archive the app and pause its Vercel project, if it is no longer used
+- Type: chore
+- Status: blocked
+- Priority: P3
+- Size: S
+- Needs: H-001
+
+Was master-project task t-014.
+
 ## Human actions
+
+### H-001 · Say whether the Monday Soccer App is still in use
+- Who: maged
+- By: Nov 2026
+- Unblocks: B-005
+- Status: open
